@@ -104,12 +104,12 @@ class WP_Job_Manager_Admin {
 
 		$screen = get_current_screen();
 
-		if ( in_array( $screen->id, apply_filters( 'job_manager_admin_screen_ids', [ 'edit-job_listing', 'plugins', 'job_listing', 'job_listing_page_job-manager-settings', 'job_listing_page_job-manager-marketplace', 'edit-job_listing_type' ] ), true ) ) {
+		if ( in_array( $screen->id, apply_filters( 'job_manager_admin_screen_ids', [ 'edit-job_listing', 'plugins', \WP_Job_Manager_Post_Types::PT_LISTING, 'job_listing_page_job-manager-settings', 'job_listing_page_job-manager-marketplace', 'edit-job_listing_type' ] ), true ) ) {
 
 			wp_enqueue_style( 'jquery-ui' );
 			wp_enqueue_style( 'select2' );
 
-			WP_Job_Manager::register_style( 'job_manager_admin_css', 'css/admin.css', [] );
+			WP_Job_Manager::register_style( 'job_manager_admin_css', 'css/admin.css', [ 'job_manager_brand' ] );
 			wp_enqueue_style( 'job_manager_admin_css' );
 
 			wp_enqueue_script( 'wp-job-manager-datepicker' );
@@ -146,7 +146,7 @@ class WP_Job_Manager_Admin {
 			);
 		}
 
-		if ( 'job_listing' === $screen->id && $screen->is_block_editor() ) { // Check if it's block editor in job post.
+		if ( \WP_Job_Manager_Post_Types::PT_LISTING === $screen->id && $screen->is_block_editor() ) { // Check if it's block editor in job post.
 			$post = get_post();
 
 			if ( ! empty( $post ) ) {
@@ -175,8 +175,10 @@ class WP_Job_Manager_Admin {
 	 * Adds pages to admin menu.
 	 */
 	public function admin_menu() {
-		remove_submenu_page( 'edit.php?post_type=job_listing', 'post-new.php?post_type=job_listing' );
 		$item = remove_submenu_page( 'edit.php?post_type=job_listing', 'edit.php?post_type=job_listing' );
+		if ( ! $item ) {
+			return;
+		}
 		// change item label to "Job Listings".
 		add_submenu_page( 'edit.php?post_type=job_listing', $item[0], esc_html__( 'Job Listings', 'wp-job-manager' ), $item[1], $item[2], '', 0 );
 		add_submenu_page( 'edit.php?post_type=job_listing', __( 'Settings', 'wp-job-manager' ), esc_html__( 'Settings', 'wp-job-manager' ), 'manage_options', 'job-manager-settings', [ $this->settings_page, 'output' ] );

@@ -198,7 +198,7 @@ class WP_Job_Manager_Shortcodes {
 			}
 
 			try {
-				if ( empty( $job ) || 'job_listing' !== $job->post_type || ! job_manager_user_can_edit_job( $job_id ) ) {
+				if ( empty( $job ) || \WP_Job_Manager_Post_Types::PT_LISTING !== $job->post_type || ! job_manager_user_can_edit_job( $job_id ) ) {
 					throw new Exception( __( 'Invalid ID', 'wp-job-manager' ) );
 				}
 
@@ -327,7 +327,7 @@ class WP_Job_Manager_Shortcodes {
 	 */
 	private function get_job_dashboard_query_args( $posts_per_page = -1 ) {
 		$job_dashboard_args = [
-			'post_type'           => 'job_listing',
+			'post_type'           => \WP_Job_Manager_Post_Types::PT_LISTING,
 			'post_status'         => [ 'publish', 'expired', 'pending', 'draft', 'preview' ],
 			'ignore_sticky_posts' => 1,
 			'posts_per_page'      => $posts_per_page,
@@ -335,6 +335,10 @@ class WP_Job_Manager_Shortcodes {
 			'order'               => 'desc',
 			'author'              => get_current_user_id(),
 		];
+
+		if ( get_option( 'job_manager_enable_scheduled_listings' ) ) {
+			$job_dashboard_args['post_status'][] = 'future';
+		}
 
 		if ( $posts_per_page > 0 ) {
 			$job_dashboard_args['offset'] = ( max( 1, get_query_var( 'paged' ) ) - 1 ) * $posts_per_page;
@@ -400,7 +404,7 @@ class WP_Job_Manager_Shortcodes {
 			[
 				'job_title' => __( 'Title', 'wp-job-manager' ),
 				'filled'    => __( 'Filled?', 'wp-job-manager' ),
-				'date'      => __( 'Date Posted', 'wp-job-manager' ),
+				'date'      => __( 'Date', 'wp-job-manager' ),
 				'expires'   => __( 'Listing Expires', 'wp-job-manager' ),
 			]
 		);
@@ -434,7 +438,7 @@ class WP_Job_Manager_Shortcodes {
 		if (
 			! get_current_user_id()
 			|| ! $job instanceof WP_Post
-			|| 'job_listing' !== $job->post_type
+			|| \WP_Job_Manager_Post_Types::PT_LISTING !== $job->post_type
 			|| ! $this->is_job_available_on_dashboard( $job )
 		) {
 			return [];
@@ -592,6 +596,7 @@ class WP_Job_Manager_Shortcodes {
 					'featured'                  => null, // True to show only featured, false to hide featured, leave null to show both.
 					'filled'                    => null, // True to show only filled, false to hide filled, leave null to show both/use the settings.
 					'remote_position'           => null, // True to show only remote, false to hide remote, leave null to show both.
+					'featured_first'            => false, // True to show featured first, false to show in default order.
 
 					// Default values for filters.
 					'location'                  => '',
@@ -613,6 +618,7 @@ class WP_Job_Manager_Shortcodes {
 		$atts['show_category_multiselect'] = $this->string_to_bool( $atts['show_category_multiselect'] );
 		$atts['show_more']                 = $this->string_to_bool( $atts['show_more'] );
 		$atts['show_pagination']           = $this->string_to_bool( $atts['show_pagination'] );
+		$atts['featured_first']            = $this->string_to_bool( $atts['featured_first'] );
 
 		if ( ! is_null( $atts['featured'] ) ) {
 			$atts['featured'] = ( is_bool( $atts['featured'] ) && $atts['featured'] ) || in_array( $atts['featured'], [ 1, '1', 'true', 'yes' ], true );
@@ -660,7 +666,7 @@ class WP_Job_Manager_Shortcodes {
 		if ( ! empty( $atts['selected_category'] ) ) {
 			foreach ( $atts['selected_category'] as $cat_index => $category ) {
 				if ( ! is_numeric( $category ) ) {
-					$term = get_term_by( 'slug', $category, 'job_listing_category' );
+					$term = get_term_by( 'slug', $category, \WP_Job_Manager_Post_Types::TAX_LISTING_CATEGORY );
 
 					if ( $term ) {
 						$atts['selected_category'][ $cat_index ] = $term->term_id;
@@ -679,6 +685,7 @@ class WP_Job_Manager_Shortcodes {
 			'order'                      => $atts['order'],
 			'categories'                 => implode( ',', $atts['categories'] ),
 			'disable-form-state-storage' => $disable_client_state,
+			'featured_first'             => $atts['featured_first'] ? 'true' : 'false',
 		];
 
 		if ( $atts['show_filters'] ) {
@@ -735,7 +742,7 @@ class WP_Job_Manager_Shortcodes {
 				get_job_manager_template( 'job-listings-start.php' );
 				while ( $jobs->have_posts() ) {
 					$jobs->the_post();
-					get_job_manager_template_part( 'content', 'job_listing' );
+					get_job_manager_template_part( 'content', \WP_Job_Manager_Post_Types::PT_LISTING );
 				}
 				get_job_manager_template( 'job-listings-end.php' );
 				if ( $jobs->found_posts > $atts['per_page'] && $atts['show_more'] ) {
@@ -856,7 +863,7 @@ class WP_Job_Manager_Shortcodes {
 		ob_start();
 
 		$args = [
-			'post_type'   => 'job_listing',
+			'post_type'   => \WP_Job_Manager_Post_Types::PT_LISTING,
 			'post_status' => 'publish',
 			'p'           => $atts['id'],
 		];
@@ -867,7 +874,7 @@ class WP_Job_Manager_Shortcodes {
 			while ( $jobs->have_posts() ) {
 				$jobs->the_post();
 				echo '<h1>' . wp_kses_post( wpjm_get_the_job_title() ) . '</h1>';
-				get_job_manager_template_part( 'content-single', 'job_listing' );
+				get_job_manager_template_part( 'content-single', \WP_Job_Manager_Post_Types::PT_LISTING );
 			}
 		}
 
@@ -897,7 +904,7 @@ class WP_Job_Manager_Shortcodes {
 		ob_start();
 
 		$args = [
-			'post_type'   => 'job_listing',
+			'post_type'   => \WP_Job_Manager_Post_Types::PT_LISTING,
 			'post_status' => 'publish',
 		];
 
@@ -925,7 +932,7 @@ class WP_Job_Manager_Shortcodes {
 				$jobs->the_post();
 				$width = $atts['width'] ? $atts['width'] : 'auto';
 				echo '<div class="job_summary_shortcode align' . esc_attr( $atts['align'] ) . '" style="width: ' . esc_attr( $width ) . '">';
-				get_job_manager_template_part( 'content-summary', 'job_listing' );
+				get_job_manager_template_part( 'content-summary', \WP_Job_Manager_Post_Types::PT_LISTING );
 				echo '</div>';
 			}
 		}
@@ -953,7 +960,7 @@ class WP_Job_Manager_Shortcodes {
 		ob_start();
 
 		$args = [
-			'post_type'   => 'job_listing',
+			'post_type'   => \WP_Job_Manager_Post_Types::PT_LISTING,
 			'post_status' => 'publish',
 		];
 

@@ -60,6 +60,7 @@ class WP_Job_Manager {
 	 */
 	public function __construct() {
 		// Includes.
+		include_once JOB_MANAGER_PLUGIN_DIR . '/includes/trait-singleton.php';
 		include_once JOB_MANAGER_PLUGIN_DIR . '/includes/class-wp-job-manager-install.php';
 		include_once JOB_MANAGER_PLUGIN_DIR . '/includes/class-wp-job-manager-post-types.php';
 		include_once JOB_MANAGER_PLUGIN_DIR . '/includes/class-wp-job-manager-ajax.php';
@@ -76,6 +77,11 @@ class WP_Job_Manager {
 		include_once JOB_MANAGER_PLUGIN_DIR . '/includes/class-wp-job-manager-data-exporter.php';
 		include_once JOB_MANAGER_PLUGIN_DIR . '/includes/class-wp-job-manager-com-api.php';
 		include_once JOB_MANAGER_PLUGIN_DIR . '/includes/promoted-jobs/class-wp-job-manager-promoted-jobs.php';
+		include_once JOB_MANAGER_PLUGIN_DIR . '/includes/class-access-token.php';
+		include_once JOB_MANAGER_PLUGIN_DIR . '/includes/class-guest-user.php';
+		include_once JOB_MANAGER_PLUGIN_DIR . '/includes/class-guest-session.php';
+		include_once JOB_MANAGER_PLUGIN_DIR . '/includes/ui/class-ui.php';
+		include_once JOB_MANAGER_PLUGIN_DIR . '/includes/ui/class-ui-settings.php';
 
 		if ( is_admin() ) {
 			include_once JOB_MANAGER_PLUGIN_DIR . '/includes/admin/class-wp-job-manager-admin.php';
@@ -136,7 +142,7 @@ class WP_Job_Manager {
 	 */
 	public function activate() {
 		WP_Job_Manager_Ajax::add_endpoint();
-		unregister_post_type( 'job_listing' );
+		unregister_post_type( \WP_Job_Manager_Post_Types::PT_LISTING );
 		add_filter( 'pre_option_job_manager_enable_types', '__return_true' );
 		$this->post_types->register_post_types();
 		remove_filter( 'pre_option_job_manager_enable_types', '__return_true' );
@@ -393,7 +399,6 @@ class WP_Job_Manager {
 			'is_rtl'                  => is_rtl() ? 1 : 0,
 			'i18n_load_prev_listings' => __( 'Load previous listings', 'wp-job-manager' ),
 		];
-
 		/**
 		 * Retrieves the current language for use when caching requests.
 		 *

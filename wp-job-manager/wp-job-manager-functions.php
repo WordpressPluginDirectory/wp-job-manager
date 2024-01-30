@@ -34,6 +34,7 @@ if ( ! function_exists( 'get_job_listings' ) ) :
 				'filled'            => null,
 				'remote_position'   => null,
 				'fields'            => 'all',
+				'featured_first'    => 0,
 			]
 		);
 
@@ -55,7 +56,7 @@ if ( ! function_exists( 'get_job_listings' ) ) :
 		}
 
 		$query_args = [
-			'post_type'              => 'job_listing',
+			'post_type'              => \WP_Job_Manager_Post_Types::PT_LISTING,
 			'post_status'            => $post_status,
 			'ignore_sticky_posts'    => 1,
 			'offset'                 => absint( $args['offset'] ),
@@ -147,7 +148,7 @@ if ( ! function_exists( 'get_job_listings' ) ) :
 
 		if ( ! empty( $args['job_types'] ) ) {
 			$query_args['tax_query'][] = [
-				'taxonomy' => 'job_listing_type',
+				'taxonomy' => \WP_Job_Manager_Post_Types::TAX_LISTING_TYPE,
 				'field'    => 'slug',
 				'terms'    => $args['job_types'],
 			];
@@ -157,7 +158,7 @@ if ( ! function_exists( 'get_job_listings' ) ) :
 			$field                     = is_numeric( $args['search_categories'][0] ) ? 'term_id' : 'slug';
 			$operator                  = 'all' === get_option( 'job_manager_category_filter_type', 'all' ) && count( $args['search_categories'] ) > 1 ? 'AND' : 'IN';
 			$query_args['tax_query'][] = [
-				'taxonomy'         => 'job_listing_category',
+				'taxonomy'         => \WP_Job_Manager_Post_Types::TAX_LISTING_CATEGORY,
 				'field'            => $field,
 				'terms'            => array_values( $args['search_categories'] ),
 				'include_children' => 'AND' !== $operator,
@@ -177,6 +178,13 @@ if ( ! function_exists( 'get_job_listings' ) ) :
 			$query_args['orderby'] = [
 				'menu_order' => 'ASC',
 				'rand'       => 'ASC',
+			];
+		}
+
+		if ( 'true' === $args['featured_first'] && 'featured' !== $args['orderby'] && 'rand_featured' !== $args['orderby'] ) {
+			$query_args['orderby'] = [
+				'menu_order'           => 'ASC',
+				$query_args['orderby'] => $query_args['order'],
 			];
 		}
 
@@ -371,6 +379,7 @@ if ( ! function_exists( 'get_job_listing_post_statuses' ) ) :
 				'pending'         => _x( 'Pending approval', 'post status', 'wp-job-manager' ),
 				'pending_payment' => _x( 'Pending payment', 'post status', 'wp-job-manager' ),
 				'publish'         => _x( 'Active', 'post status', 'wp-job-manager' ),
+				'future'          => _x( 'Scheduled', 'post status', 'wp-job-manager' ),
 			]
 		);
 	}
@@ -388,7 +397,7 @@ if ( ! function_exists( 'get_featured_job_ids' ) ) :
 			[
 				'posts_per_page'   => -1,
 				'suppress_filters' => false,
-				'post_type'        => 'job_listing',
+				'post_type'        => \WP_Job_Manager_Post_Types::PT_LISTING,
 				'post_status'      => 'publish',
 				'meta_key'         => '_featured', // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_key -- Used in production with no issues.
 				'meta_value'       => '1', // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_value -- Used in production with no issues.
@@ -420,7 +429,7 @@ if ( ! function_exists( 'get_job_listing_types' ) ) :
 			$args = apply_filters( 'get_job_listing_types_args', $args );
 
 			// Prevent users from filtering the taxonomy.
-			$args['taxonomy'] = 'job_listing_type';
+			$args['taxonomy'] = \WP_Job_Manager_Post_Types::TAX_LISTING_TYPE;
 
 			return get_terms( $args );
 		}
@@ -455,7 +464,7 @@ if ( ! function_exists( 'get_job_listing_categories' ) ) :
 		$args = apply_filters( 'get_job_listing_category_args', $args );
 
 		// Prevent users from filtering the taxonomy.
-		$args['taxonomy'] = 'job_listing_category';
+		$args['taxonomy'] = \WP_Job_Manager_Post_Types::TAX_LISTING_CATEGORY;
 
 		return get_terms( $args );
 	}
@@ -477,7 +486,7 @@ if ( ! function_exists( 'job_manager_get_filtered_links' ) ) :
 		if ( $args['search_categories'] ) {
 			foreach ( $args['search_categories'] as $category ) {
 				if ( is_numeric( $category ) ) {
-					$category_object = get_term_by( 'id', $category, 'job_listing_category' );
+					$category_object = get_term_by( 'id', $category, \WP_Job_Manager_Post_Types::TAX_LISTING_CATEGORY );
 					if ( ! is_wp_error( $category_object ) ) {
 						$job_categories[] = $category_object->slug;
 					}
@@ -525,7 +534,8 @@ if ( ! function_exists( 'job_manager_get_filtered_links' ) ) :
 		$return = '';
 
 		foreach ( $links as $key => $link ) {
-			$return .= '<a href="' . esc_url( $link['url'] ) . '" class="' . esc_attr( $key ) . '">' . wp_kses_post( $link['name'] ) . '</a>';
+			$attrs   = ! empty( $link['onclick'] ) ? ' onclick="' . esc_attr( $link['onclick'] ) . '"' : '';
+			$return .= '<a href="' . esc_url( $link['url'] ) . '" class="' . esc_attr( $key ) . '"' . $attrs . '>' . wp_kses_post( $link['name'] ) . '</a>';
 		}
 
 		return $return;
@@ -752,7 +762,7 @@ function job_manager_user_can_edit_job( $job_id ) {
 	} else {
 		$job = get_post( $job_id );
 
-		if ( ! $job || 'job_listing' !== $job->post_type || ( absint( $job->post_author ) !== get_current_user_id() && ! current_user_can( 'edit_post', $job_id ) ) ) {
+		if ( ! $job || \WP_Job_Manager_Post_Types::PT_LISTING !== $job->post_type || ( absint( $job->post_author ) !== get_current_user_id() && ! current_user_can( 'edit_post', $job_id ) ) ) {
 			$can_edit = false;
 		}
 	}
@@ -786,7 +796,7 @@ function is_wpjm() {
  * @return bool
  */
 function is_wpjm_page() {
-	$is_wpjm_page = is_post_type_archive( 'job_listing' );
+	$is_wpjm_page = is_post_type_archive( \WP_Job_Manager_Post_Types::PT_LISTING );
 
 	if ( ! $is_wpjm_page ) {
 		$wpjm_page_ids = array_filter(
@@ -882,7 +892,7 @@ function has_wpjm_shortcode( $content = null, $tag = null ) {
  * @return bool
  */
 function is_wpjm_job_listing() {
-	return is_singular( [ 'job_listing' ] );
+	return is_singular( [ \WP_Job_Manager_Post_Types::PT_LISTING ] );
 }
 
 /**
@@ -893,7 +903,7 @@ function is_wpjm_job_listing() {
  * @return bool
  */
 function is_wpjm_taxonomy() {
-	return is_tax( get_object_taxonomies( 'job_listing' ) );
+	return is_tax( get_object_taxonomies( \WP_Job_Manager_Post_Types::PT_LISTING ) );
 }
 
 /**
@@ -1161,7 +1171,7 @@ function job_manager_dropdown_categories( $args = '' ) {
 		'id'              => '',
 		'class'           => 'job-manager-category-dropdown ' . ( is_rtl() ? 'chosen-rtl' : '' ),
 		'depth'           => 0,
-		'taxonomy'        => 'job_listing_category',
+		'taxonomy'        => \WP_Job_Manager_Post_Types::TAX_LISTING_CATEGORY,
 		'value'           => 'id',
 		'multiple'        => true,
 		'show_option_all' => false,
@@ -1513,7 +1523,7 @@ function job_manager_duplicate_listing( $post_id ) {
 	}
 
 	$post = get_post( $post_id );
-	if ( ! $post || 'job_listing' !== $post->post_type ) {
+	if ( ! $post || \WP_Job_Manager_Post_Types::PT_LISTING !== $post->post_type ) {
 		return 0;
 	}
 

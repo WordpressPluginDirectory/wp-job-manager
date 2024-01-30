@@ -250,7 +250,7 @@ class WP_Job_Manager_Form_Submit_Job extends WP_Job_Manager_Form {
 						'placeholder' => __( 'Choose job type&hellip;', 'wp-job-manager' ),
 						'priority'    => 4,
 						'default'     => 'full-time',
-						'taxonomy'    => 'job_listing_type',
+						'taxonomy'    => \WP_Job_Manager_Post_Types::TAX_LISTING_TYPE,
 					],
 					'job_category'        => [
 						'label'       => __( 'Job category', 'wp-job-manager' ),
@@ -259,7 +259,7 @@ class WP_Job_Manager_Form_Submit_Job extends WP_Job_Manager_Form {
 						'placeholder' => '',
 						'priority'    => 5,
 						'default'     => '',
-						'taxonomy'    => 'job_listing_category',
+						'taxonomy'    => \WP_Job_Manager_Post_Types::TAX_LISTING_CATEGORY,
 					],
 					'job_description'     => [
 						'label'    => __( 'Description', 'wp-job-manager' ),
@@ -357,10 +357,10 @@ class WP_Job_Manager_Form_Submit_Job extends WP_Job_Manager_Form {
 			]
 		);
 
-		if ( ! get_option( 'job_manager_enable_categories' ) || 0 === intval( wp_count_terms( 'job_listing_category' ) ) ) {
+		if ( ! get_option( 'job_manager_enable_categories' ) || 0 === intval( wp_count_terms( \WP_Job_Manager_Post_Types::TAX_LISTING_CATEGORY ) ) ) {
 			unset( $this->fields['job']['job_category'] );
 		}
-		if ( ! get_option( 'job_manager_enable_types' ) || 0 === intval( wp_count_terms( 'job_listing_type' ) ) ) {
+		if ( ! get_option( 'job_manager_enable_types' ) || 0 === intval( wp_count_terms( \WP_Job_Manager_Post_Types::TAX_LISTING_TYPE ) ) ) {
 			unset( $this->fields['job']['job_type'] );
 		}
 		if ( get_option( 'job_manager_enable_salary' ) ) {
@@ -376,6 +376,19 @@ class WP_Job_Manager_Form_Submit_Job extends WP_Job_Manager_Form {
 		if ( ! get_option( 'job_manager_enable_remote_position' ) ) {
 			unset( $this->fields['job']['remote_position'] );
 		}
+
+		if ( get_option( 'job_manager_enable_scheduled_listings' ) ) {
+			$this->fields['job']['job_schedule_listing'] = [
+				'label'       => __( 'Scheduled Date', 'wp-job-manager' ),
+				'description' => __( 'Optionally set the date when this listing will be published.', 'wp-job-manager' ),
+				'type'        => 'date',
+				'required'    => false,
+				'placeholder' => '',
+				'priority'    => '6.5',
+			];
+		}
+
+		return $this->fields;
 	}
 
 	/**
@@ -628,13 +641,13 @@ class WP_Job_Manager_Form_Submit_Job extends WP_Job_Manager_Form {
 							$this->fields[ $group_key ][ $key ]['value'] = $job->post_content;
 							break;
 						case 'job_type':
-							$this->fields[ $group_key ][ $key ]['value'] = wp_get_object_terms( $job->ID, 'job_listing_type', [ 'fields' => 'ids' ] );
+							$this->fields[ $group_key ][ $key ]['value'] = wp_get_object_terms( $job->ID, \WP_Job_Manager_Post_Types::TAX_LISTING_TYPE, [ 'fields' => 'ids' ] );
 							if ( ! job_manager_multi_job_type() ) {
 								$this->fields[ $group_key ][ $key ]['value'] = current( $this->fields[ $group_key ][ $key ]['value'] );
 							}
 							break;
 						case 'job_category':
-							$this->fields[ $group_key ][ $key ]['value'] = wp_get_object_terms( $job->ID, 'job_listing_category', [ 'fields' => 'ids' ] );
+							$this->fields[ $group_key ][ $key ]['value'] = wp_get_object_terms( $job->ID, \WP_Job_Manager_Post_Types::TAX_LISTING_CATEGORY, [ 'fields' => 'ids' ] );
 							break;
 						case 'company_logo':
 							$this->fields[ $group_key ][ $key ]['value'] = has_post_thumbnail( $job->ID ) ? get_post_thumbnail_id( $job->ID ) : get_post_meta( $job->ID, '_' . $key, true );
@@ -840,9 +853,20 @@ class WP_Job_Manager_Form_Submit_Job extends WP_Job_Manager_Form {
 		$job_data = [
 			'post_title'     => $post_title,
 			'post_content'   => $post_content,
-			'post_type'      => 'job_listing',
+			'post_type'      => \WP_Job_Manager_Post_Types::PT_LISTING,
 			'comment_status' => 'closed',
 		];
+
+		if ( ! empty( $values['job']['job_schedule_listing'] ) ) {
+			$maybe_formatted_date = $this->maybe_format_future_datetime( $values['job']['job_schedule_listing'] );
+
+			if ( false !== $maybe_formatted_date ) {
+				$job_data['post_date']     = $maybe_formatted_date;
+				$job_data['post_date_gmt'] = $maybe_formatted_date;
+			} else {
+				unset( $values['job']['job_schedule_listing'] );
+			}
+		}
 
 		if ( $update_slug ) {
 			$job_slug = [];
@@ -865,7 +889,7 @@ class WP_Job_Manager_Form_Submit_Job extends WP_Job_Manager_Form {
 					$terms = $values['job']['job_type'];
 
 					foreach ( $terms as $term ) {
-						$term = get_term_by( 'id', intval( $term ), 'job_listing_type' );
+						$term = get_term_by( 'id', intval( $term ), \WP_Job_Manager_Post_Types::TAX_LISTING_TYPE );
 
 						if ( $term ) {
 							$job_slug[] = $term->slug;
@@ -1063,6 +1087,31 @@ class WP_Job_Manager_Form_Submit_Job extends WP_Job_Manager_Form {
 	}
 
 	/**
+	 * Checks that a string is a valid future datetime. Formats datetime for post date.
+	 *
+	 * @param string $maybe_date_string The date to format.
+	 *
+	 * @return false|mixed
+	 */
+	private function maybe_format_future_datetime( string $maybe_date_string ): mixed {
+		if ( empty( $maybe_date_string ) ) {
+			return false;
+		}
+
+		$time = strtotime( $maybe_date_string );
+		if ( false === $time ) {
+			return false;
+		}
+
+		if ( $time < time() ) {
+			return false;
+		}
+
+		$fmt = 'Y-m-d H:i:s';
+		return wp_date( $fmt, $time );
+	}
+
+	/**
 	 * Handles the preview step form response.
 	 */
 	public function preview_handler() {
@@ -1086,12 +1135,23 @@ class WP_Job_Manager_Form_Submit_Job extends WP_Job_Manager_Form {
 				// Reset expiry.
 				delete_post_meta( $job->ID, '_job_expires' );
 
+				$post_date     = current_time( 'mysql' );
+				$post_date_gmt = current_time( 'mysql', 1 );
+
+				$job_schedule_listing_date = get_post_meta( $job->ID, '_job_schedule_listing', true );
+				$maybe_formatted_date      = $this->maybe_format_future_datetime( $job_schedule_listing_date );
+
+				if ( false !== $maybe_formatted_date ) {
+					$post_date     = $maybe_formatted_date;
+					$post_date_gmt = $maybe_formatted_date;
+				}
+
 				// Update job listing.
 				$update_job                  = [];
 				$update_job['ID']            = $job->ID;
 				$update_job['post_status']   = apply_filters( 'submit_job_post_status', get_option( 'job_manager_submission_requires_approval' ) ? 'pending' : 'publish', $job );
-				$update_job['post_date']     = current_time( 'mysql' );
-				$update_job['post_date_gmt'] = current_time( 'mysql', 1 );
+				$update_job['post_date']     = $post_date;
+				$update_job['post_date_gmt'] = $post_date_gmt;
 				$update_job['post_author']   = get_current_user_id();
 
 				wp_update_post( $update_job );

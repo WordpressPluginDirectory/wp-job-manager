@@ -17,6 +17,16 @@ if ( ! defined( 'ABSPATH' ) ) {
 class WP_Job_Manager_Settings {
 
 	/**
+	 * Maximium value for the "Listing duration" setting (100 years).
+	 */
+	public const MAX_ALLOWED_SUBMISSION_DAYS = 36500;
+
+	/**
+	 * Maximum value for the "Listing limit" setting (1,000,000 listings).
+	 */
+	public const MAX_ALLOWED_SUBMISSION_LIMIT = 1000000;
+
+	/**
 	 * The single instance of the class.
 	 *
 	 * @var self
@@ -294,6 +304,14 @@ class WP_Job_Manager_Settings {
 							'desc'     => __( 'Display the full address of the job listing location if it is detected by Google Maps Geocoding API. If full address is not available then it will display whatever text the user submitted for the location.', 'wp-job-manager' ),
 							'type'     => 'checkbox',
 						],
+						[
+							'name'     => 'job_manager_strip_job_description_shortcodes',
+							'std'      => '0',
+							'label'    => __( 'Strip Shortcodes', 'wp-job-manager' ),
+							'cb_label' => __( 'Strip shortcodes from Job description', 'wp-job-manager' ),
+							'desc'     => __( 'If enabled, shortcodes will be stripped from the job description on the single job listing page.', 'wp-job-manager' ),
+							'type'     => 'checkbox',
+						],
 					],
 				],
 				'job_submission' => [
@@ -314,6 +332,16 @@ class WP_Job_Manager_Settings {
 							'label'      => __( 'Account Creation', 'wp-job-manager' ),
 							'cb_label'   => __( 'Enable account creation during submission', 'wp-job-manager' ),
 							'desc'       => __( 'Includes account creation on the listing submission form, to allow non-registered users to create an account and submit a job listing simultaneously.', 'wp-job-manager' ),
+							'type'       => 'checkbox',
+							'attributes' => [],
+						],
+						[
+
+							'name'       => 'job_manager_enable_scheduled_listings',
+							'std'        => '0',
+							'label'      => __( 'Scheduled Listings', 'wp-job-manager' ),
+							'cb_label'   => __( 'Enable scheduled listings', 'wp-job-manager' ),
+							'desc'       => __( 'Allow employers to set a date in the future for the listing to publish.', 'wp-job-manager' ),
 							'type'       => 'checkbox',
 							'attributes' => [],
 						],
@@ -376,27 +404,33 @@ class WP_Job_Manager_Settings {
 							'attributes' => [],
 						],
 						[
-							'name'       => 'job_manager_submission_duration',
-							'std'        => '30',
-							'label'      => __( 'Listing Duration', 'wp-job-manager' ),
-							'desc'       => __( 'Listings will display for the set number of days, then expire. Leave this field blank if you don\'t want listings to have an expiration date.', 'wp-job-manager' ),
-							'attributes' => [],
+							'name'              => 'job_manager_submission_duration',
+							'std'               => '30',
+							'label'             => __( 'Listing Duration', 'wp-job-manager' ),
+							'desc'              => __( 'Listings will display for the set number of days, then expire. Leave this field blank if you don\'t want listings to have an expiration date.', 'wp-job-manager' ),
+							'type'              => 'number',
+							'attributes'        => [],
+							'sanitize_callback' => [ $this, 'sanitize_submission_duration' ],
+							'placeholder'       => __( 'No limit', 'wp-job-manager' ),
 						],
 						[
-							'name'       => 'job_manager_renewal_days',
-							'std'        => 5,
-							'label'      => __( 'Renewal Window', 'wp-job-manager' ),
-							'desc'       => __( 'Sets the number of days before expiration where users are given the option to renew their listings. For example, entering "7" will allow users to renew their listing one week before expiration. Entering "0" will disable renewals entirely.', 'wp-job-manager' ),
-							'type'       => 'number',
-							'attributes' => [],
+							'name'              => 'job_manager_renewal_days',
+							'std'               => 5,
+							'label'             => __( 'Renewal Window', 'wp-job-manager' ),
+							'desc'              => __( 'Sets the number of days before expiration where users are given the option to renew their listings. For example, entering "7" will allow users to renew their listing one week before expiration. Entering "0" will disable renewals entirely.', 'wp-job-manager' ),
+							'type'              => 'number',
+							'attributes'        => [],
+							'sanitize_callback' => [ $this, 'sanitize_renewal_days' ],
 						],
 						[
-							'name'        => 'job_manager_submission_limit',
-							'std'         => '',
-							'label'       => __( 'Listing Limit', 'wp-job-manager' ),
-							'desc'        => __( 'How many listings are users allowed to post. Can be left blank to allow unlimited listings per account.', 'wp-job-manager' ),
-							'attributes'  => [],
-							'placeholder' => __( 'No limit', 'wp-job-manager' ),
+							'name'              => 'job_manager_submission_limit',
+							'std'               => '',
+							'label'             => __( 'Listing Limit', 'wp-job-manager' ),
+							'desc'              => __( 'How many listings are users allowed to post. Can be left blank to allow unlimited listings per account.', 'wp-job-manager' ),
+							'type'              => 'number',
+							'attributes'        => [],
+							'sanitize_callback' => [ $this, 'sanitize_submission_limit' ],
+							'placeholder'       => __( 'No limit', 'wp-job-manager' ),
 						],
 						[
 							'name'    => 'job_manager_allowed_application_method',
@@ -546,19 +580,37 @@ class WP_Job_Manager_Settings {
 	 */
 	public function output() {
 		$this->init_settings();
+
 		?>
+
 		<div class="wrap job-manager-settings-wrap">
 			<form class="job-manager-options" method="post" action="options.php">
 
 				<?php settings_fields( $this->settings_group ); ?>
 
-				<h2 class="nav-tab-wrapper">
-					<?php
-					foreach ( $this->settings as $key => $section ) {
-						echo '<a href="#settings-' . esc_attr( sanitize_title( $key ) ) . '" class="nav-tab">' . esc_html( $section[0] ) . '</a>';
-					}
-					?>
-				</h2>
+				<div class="job-manager-settings-header-wrap">
+					<div class="job-manager-settings-header">
+						<div class="job-manager-settings-header-row">
+							<div class="job-manager-settings-logo-wrap">
+								<?php
+								// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Attributes escaped in method.
+								echo $this->get_logo();
+								?>
+							</div>
+							<input type="submit" class="job-manager-settings-submit wpjm-button is-outline" value="<?php esc_attr_e( 'Save Changes', 'wp-job-manager' ); ?>" />
+						</div>
+
+						<div class="nav-tab-wrapper">
+							<?php
+							foreach ( $this->settings as $key => $section ) {
+								echo '<a href="' . esc_url( '#settings-' . sanitize_title( $key ) ) . '" class="nav-tab">' . esc_html( $section[0] ) . '</a>';
+							}
+							?>
+						</div>
+					</div>
+				</div>
+				<div class="job-manager-settings-body">
+					<div class="wp-header-end"></div>
 
 				<?php
 				// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Used for basic flow.
@@ -588,9 +640,10 @@ class WP_Job_Manager_Settings {
 
 				}
 				?>
-				<p class="submit">
-					<input type="submit" class="button-primary" value="<?php esc_attr_e( 'Save Changes', 'wp-job-manager' ); ?>" />
-				</p>
+				</div>
+				<div class="job-manager-settings-footer-mobile">
+					<input type="submit" class="job-manager-settings-submit wpjm-button is-outline" value="<?php esc_attr_e( 'Save Changes', 'wp-job-manager' ); ?>" />
+				</div>
 			</form>
 		</div>
 		<script type="text/javascript">
@@ -788,14 +841,36 @@ class WP_Job_Manager_Settings {
 	}
 
 	/**
-	 * Radio input field.
+	 * Color input field.
 	 *
 	 * @param array  $option
 	 * @param array  $ignored_attributes
 	 * @param mixed  $value
 	 * @param string $ignored_placeholder
 	 */
-	protected function input_radio( $option, $ignored_attributes, $value, $ignored_placeholder ) {
+	protected function input_color( $option, $ignored_attributes, $value, $ignored_placeholder ) {
+		?>
+		<input
+			id="setting-<?php echo esc_attr( $option['name'] ); ?>"
+			class="job-alerts-color-picker"
+			type="color"
+			name="<?php echo esc_attr( $option['name'] ); ?>"
+			value="<?php echo esc_attr( $value ); ?>"
+		/>
+		<?php
+		if ( ! empty( $option['desc'] ) ) {
+			echo ' <p class="description">' . wp_kses_post( $option['desc'] ) . '</p>';
+		}
+	}
+
+	/**
+	 * Multiple Choice field output (radio or checkbox).
+	 *
+	 * @param array  $option Option data.
+	 * @param mixed  $value  Current value.
+	 * @param string $type   'radio' or 'checkbox'.
+	 */
+	protected function multiple_choice_output( $option, $value, $type ) {
 		?>
 		<fieldset>
 		<legend class="screen-reader-text">
@@ -805,15 +880,43 @@ class WP_Job_Manager_Settings {
 		if ( ! empty( $option['desc'] ) ) {
 			echo ' <p class="description">' . wp_kses_post( $option['desc'] ) . '</p>';
 		}
-
 		foreach ( $option['options'] as $key => $name ) {
-			echo '<label><input name="' . esc_attr( $option['name'] ) . '" type="radio" value="' . esc_attr( $key ) . '" ' . checked( $value, $key, false ) . ' />' . esc_html( $name ) . '</label><br>';
+			$input_name = esc_attr( 'checkbox' === $type ? $option['name'] . '[fields][' . $key . ']' : $option['name'] );
+			$input_type = esc_attr( $type );
+			$is_checked = 'checkbox' === $type
+				? checked( isset( $value['fields'] ) && is_array( $value['fields'] ) && in_array( $key, $value['fields'], true ), true, 0 )
+				: checked( $value, $key, false );
+			$label      = esc_html( $name );
+
+			echo "<label><input name='{$input_name}' type='{$input_type}' value='{$key}' {$is_checked} />{$label}</label><br>"; //phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
 		}
 		?>
 		</fieldset>
 		<?php
 	}
+	/**
+	 * Radio input field.
+	 *
+	 * @param array  $option
+	 * @param array  $ignored_attributes
+	 * @param mixed  $value
+	 * @param string $ignored_placeholder
+	 */
+	protected function input_radio( $option, $ignored_attributes, $value, $ignored_placeholder ) {
+		$this->multiple_choice_output( $option, $value, 'radio' );
+	}
 
+	/**
+	 * Multiple Checkbox input field.
+	 *
+	 * @param array  $option
+	 * @param array  $ignored_attributes
+	 * @param mixed  $value
+	 * @param string $ignored_placeholder
+	 */
+	protected function input_multi_checkbox( $option, $ignored_attributes, $value, $ignored_placeholder ) {
+		$this->multiple_choice_output( $option, $value, 'checkbox' );
+	}
 	/**
 	 * Page input field.
 	 *
@@ -908,13 +1011,25 @@ class WP_Job_Manager_Settings {
 	 * @param string $placeholder
 	 */
 	protected function input_number( $option, $attributes, $value, $placeholder ) {
+		$field_name      = $option['name'] ?? '';
+		$text_class_name = 'small-text';
+
+		$regular_text_inputs = [
+			'job_manager_submission_duration' => true,
+			'job_manager_submission_limit'    => true,
+		];
+
+		if ( isset( $regular_text_inputs[ $field_name ] ) ) {
+			$text_class_name = 'regular-text';
+		}
+
 		echo isset( $option['before'] ) ? wp_kses_post( $option['before'] ) : '';
 		?>
 		<input
-			id="setting-<?php echo esc_attr( $option['name'] ); ?>"
-			class="small-text"
+			id="setting-<?php echo esc_attr( $field_name ); ?>"
+			class="<?php echo esc_attr( $text_class_name ); ?>"
 			type="number"
-			name="<?php echo esc_attr( $option['name'] ); ?>"
+			name="<?php echo esc_attr( $field_name ); ?>"
 			value="<?php echo esc_attr( $value ); ?>"
 			<?php
 			echo implode( ' ', $attributes ) . ' '; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
@@ -1009,6 +1124,10 @@ class WP_Job_Manager_Settings {
 	 * @param string $placeholder
 	 */
 	protected function input_multi_enable_expand( $option, $attributes, $values, $placeholder ) {
+		if ( empty( $values ) ) {
+			$values = [];
+		}
+
 		echo '<div class="setting-enable-expand">';
 		$enable_option               = $option['enable_field'];
 		$enable_option['name']       = $option['name'] . '[' . $enable_option['name'] . ']';
@@ -1026,7 +1145,9 @@ class WP_Job_Manager_Settings {
 			$enable_option['attributes'][] = 'disabled="disabled"';
 		}
 
-		$this->input_checkbox( $enable_option, $enable_option['attributes'], $values[ $option['enable_field']['name'] ], null );
+		$value = $values[ $option['enable_field']['name'] ] ?? '';
+
+		$this->input_checkbox( $enable_option, $enable_option['attributes'], $value, null );
 
 		echo '<div class="sub-settings-expandable">';
 		$this->input_multi( $option, $attributes, $values, $placeholder );
@@ -1130,6 +1251,60 @@ class WP_Job_Manager_Settings {
 	}
 
 	/**
+	 * Internal helper for numeric sanitization.
+	 *
+	 * @param stirng|int $value
+	 * @param int        $min
+	 * @param int        $max
+	 * @param mixed      $default (optional).
+	 * @param bool       $include_min (optional).
+	 * @return string|int
+	 */
+	private function sanitize_numeric_boundaries( $value, $min, $max, $default = '', $include_min = true ) {
+		if ( ! is_numeric( $value ) ) {
+			return $default;
+		}
+
+		if ( ! $include_min && $value <= $min ) {
+			return $default;
+		} elseif ( $value < $min ) {
+			return $default;
+		}
+
+		return $value > $max ? $default : $value;
+	}
+
+	/**
+	 * Sanitize the submission duration value between 1 and MAX_ALLOWED_SUBMISSION_DAYS days
+	 *
+	 * @param string|int $value
+	 * @return string|int
+	 */
+	public function sanitize_submission_duration( $value ) {
+		return $this->sanitize_numeric_boundaries( $value, 0, self::MAX_ALLOWED_SUBMISSION_DAYS, '', false );
+	}
+
+	/**
+	 * Sanitizes the renewal days value between 0 and MAX_ALLOWED_SUBMISSION_DAYS days
+	 *
+	 * @param string|int $value
+	 * @return string|int
+	 */
+	public function sanitize_renewal_days( $value ) {
+		return $this->sanitize_numeric_boundaries( $value, 0, self::MAX_ALLOWED_SUBMISSION_DAYS );
+	}
+
+	/**
+	 * Sanitize the submission limit between 0 and MAX_ALLOWED_SUBMISSION_LIMIT
+	 *
+	 * @param string|int $value
+	 * @return string|int
+	 */
+	public function sanitize_submission_limit( $value ) {
+		return $this->sanitize_numeric_boundaries( $value, 0, self::MAX_ALLOWED_SUBMISSION_LIMIT );
+	}
+
+	/**
 	 * Get the list of roles and capabilities to use in select dropdown.
 	 *
 	 * @param array $caps Selected capabilities to ensure they show up in the list.
@@ -1151,5 +1326,16 @@ class WP_Job_Manager_Settings {
 		}
 
 		return $capabilities_and_roles;
+	}
+
+	/**
+	 * Get the logo for the page.
+	 *
+	 * @return string
+	 */
+	protected function get_logo(): string {
+		return '<img class="job-manager-settings-logo"
+					src="' . esc_url( JOB_MANAGER_PLUGIN_URL . '/assets/images/jm-full-logo.png' ) . '"
+					alt="' . esc_attr__( 'Job Manager', 'wp-job-manager' ) . '" />';
 	}
 }

@@ -135,6 +135,7 @@ class WP_Job_Manager_Ajax {
 		$featured           = isset( $_REQUEST['featured'] ) ? sanitize_text_field( wp_unslash( $_REQUEST['featured'] ) ) : null;
 		$remote_position    = isset( $_REQUEST['remote_position'] ) ? sanitize_text_field( wp_unslash( $_REQUEST['remote_position'] ) ) : null;
 		$show_pagination    = isset( $_REQUEST['show_pagination'] ) ? sanitize_text_field( wp_unslash( $_REQUEST['show_pagination'] ) ) : null;
+		$featured_first     = isset( $_REQUEST['featured_first'] ) ? sanitize_text_field( wp_unslash( $_REQUEST['featured_first'] ) ) : null;
 		// phpcs:enable WordPress.Security.NonceVerification.Recommended
 
 		if ( is_array( $search_categories ) ) {
@@ -154,6 +155,7 @@ class WP_Job_Manager_Ajax {
 			'post_status'       => $filter_post_status,
 			'orderby'           => $orderby,
 			'order'             => $order,
+			'featured_first'    => $featured_first,
 			'offset'            => ( $page - 1 ) * $per_page,
 			'posts_per_page'    => max( 1, $per_page ), // phpcs:ignore WordPress.WP.PostsPerPage.posts_per_page_posts_per_page -- Known slow query.
 		];
@@ -262,7 +264,7 @@ class WP_Job_Manager_Ajax {
 		if ( $result['found_jobs'] ) {
 			while ( $jobs->have_posts() ) {
 				$jobs->the_post();
-				get_job_manager_template_part( 'content', 'job_listing' );
+				get_job_manager_template_part( 'content', \WP_Job_Manager_Post_Types::PT_LISTING );
 			}
 		} else {
 			get_job_manager_template_part( 'content', 'no-jobs-found' );
@@ -333,7 +335,7 @@ class WP_Job_Manager_Ajax {
 		 *
 		 * @param array $user_caps Array of capabilities/roles that are allowed to search for users.
 		 */
-		$allowed_capabilities = apply_filters( 'job_manager_caps_can_search_users', [ 'edit_job_listings' ] );
+		$allowed_capabilities = apply_filters( 'job_manager_caps_can_search_users', [ \WP_Job_Manager_Post_Types::CAP_EDIT_LISTINGS ] );
 		foreach ( $allowed_capabilities as $cap ) {
 			if ( current_user_can( $cap ) ) {
 				$user_can_search_users = true;
