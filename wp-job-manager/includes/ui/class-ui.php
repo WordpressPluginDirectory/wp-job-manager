@@ -14,11 +14,6 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit; // Exit if accessed directly.
 }
 
-require_once JOB_MANAGER_PLUGIN_DIR . '/includes/ui/class-ui-elements.php';
-require_once JOB_MANAGER_PLUGIN_DIR . '/includes/ui/class-notice.php';
-require_once JOB_MANAGER_PLUGIN_DIR . '/includes/ui/class-modal-dialog.php';
-require_once JOB_MANAGER_PLUGIN_DIR . '/includes/ui/class-redirect-message.php';
-
 /**
  * Frontend UI elements of Job Manager.
  *
@@ -51,23 +46,39 @@ class UI {
 	private function __construct() {
 		$this->has_ui        = false;
 		$this->css_variables = [];
-		add_action( 'wp_enqueue_scripts', [ $this, 'enqueue_styles' ] );
+		add_action( 'init', [ $this, 'register_styles' ], 5 );
+		add_action( 'wp_enqueue_scripts', [ $this, 'enqueue_styles' ], 99 );
+		add_action( 'admin_enqueue_scripts', [ $this, 'enqueue_styles' ], 99 );
 	}
 
 	/**
-	 * Register and enqueue styles.
+	 * Register styles.
+	 *
+	 * @access private
+	 */
+	public function register_styles() {
+		\WP_Job_Manager::register_style( 'wp-job-manager-ui', 'css/ui.css', [] );
+		\WP_Job_Manager::register_script( 'wp-job-manager-ui-theme-support', 'js/ui-theme-support.js' );
+	}
+
+	/**
+	 * Enqueue styles and inline CSS.
 	 *
 	 * @access private
 	 */
 	public function enqueue_styles() {
-		\WP_Job_Manager::register_style( 'wp-job-manager-ui', 'css/ui.css', [] );
-
-		if ( $this->has_ui ) {
+		if ( $this->has_ui || wp_style_is( 'wp-job-manager-ui', 'enqueued' ) ) {
 			wp_enqueue_style( 'wp-job-manager-ui' );
 
-			if ( ! empty( $this->css_variables ) ) {
-				wp_add_inline_style( 'wp-job-manager-ui', $this->generate_inline_css() );
+			/**
+			 * Filter whether to load the script that detects theme colors and styles for the plugin's UI elements.
+			 */
+			if ( apply_filters( 'job_manager_ui_theme_support_script', true ) ) {
+				wp_enqueue_script( 'wp-job-manager-ui-theme-support' );
 			}
+
+			wp_add_inline_style( 'wp-job-manager-ui', $this->generate_inline_css() );
+
 		}
 	}
 
@@ -92,9 +103,23 @@ class UI {
 	 */
 	private function generate_inline_css() {
 
-		$css = ':root{';
+		$vars = $this->css_variables;
 
-		foreach ( $this->css_variables as $name => $value ) {
+		/**
+		 * Set the accent color for frontend components. Leave blank to auto-detect and use the link color.
+		 *
+		 * @param string|false $color CSS color definition.
+		 *
+		 * @since 2.3.0
+		 */
+		$vars['--jm-ui-accent-color'] = apply_filters( 'job_manager_ui_accent_color', $vars['--jm-ui-accent-color'] ?? false );
+
+		$css = ':root {';
+
+		foreach ( $vars as $name => $value ) {
+			if ( empty( $value ) ) {
+				continue;
+			}
 			$css .= esc_attr( $name ) . ': ' . esc_attr( $value ) . ';';
 		}
 
@@ -103,5 +128,3 @@ class UI {
 		return $css;
 	}
 }
-
-UI::instance();

@@ -5,6 +5,8 @@
  * @package wp-job-manager
  */
 
+use WP_Job_Manager\Job_Overlay;
+
 if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
@@ -32,6 +34,13 @@ class WP_Job_Manager_Admin {
 	private $settings_page;
 
 	/**
+	 * Whether promoted jobs are enabled.
+	 *
+	 * @var bool
+	 */
+	private $are_promoted_jobs_enabled;
+
+	/**
 	 * Allows for accessing single instance of class. Class should only be constructed once per call.
 	 *
 	 * @since  1.26.0
@@ -56,8 +65,14 @@ class WP_Job_Manager_Admin {
 		include_once dirname( __FILE__ ) . '/class-wp-job-manager-cpt.php';
 		WP_Job_Manager_CPT::instance();
 
-		include_once dirname( __FILE__ ) . '/class-wp-job-manager-promoted-jobs-admin.php';
-		include_once dirname( __FILE__ ) . '/class-wp-job-manager-settings.php';
+		/**
+		 * Documented in class-wp-job-manager.php
+		 */
+		$this->are_promoted_jobs_enabled = apply_filters( 'job_manager_enable_promoted_jobs', true );
+		if ( $this->are_promoted_jobs_enabled ) {
+			include_once dirname( __FILE__ ) . '/class-wp-job-manager-promoted-jobs-admin.php';
+		}
+
 		include_once dirname( __FILE__ ) . '/class-wp-job-manager-writepanels.php';
 		include_once dirname( __FILE__ ) . '/class-wp-job-manager-setup.php';
 		include_once dirname( __FILE__ ) . '/class-wp-job-manager-addons-landing-page.php';
@@ -65,6 +80,7 @@ class WP_Job_Manager_Admin {
 
 		$this->settings_page = WP_Job_Manager_Settings::instance();
 		WP_Job_Manager_Addons_Landing_Page::instance();
+		Job_Overlay::instance();
 
 		add_action( 'admin_init', [ $this, 'admin_init' ] );
 		add_action( 'current_screen', [ $this, 'conditional_includes' ] );
@@ -119,7 +135,7 @@ class WP_Job_Manager_Admin {
 			wp_enqueue_script( 'job_manager_admin_js' );
 
 			WP_Job_Manager::register_script( 'job_tags_upsell_js', 'js/admin/job-tags-upsell.js', [], true );
-			if ( ! class_exists( 'WP_Job_Manager_Job_Tags' ) ) {
+			if ( ! class_exists( 'WP_Job_Manager_Job_Tags' ) && $screen->is_block_editor() ) {
 				wp_enqueue_script( 'job_tags_upsell_js' );
 			}
 
@@ -142,11 +158,12 @@ class WP_Job_Manager_Admin {
 					],
 					'ajax_url'                    => admin_url( 'admin-ajax.php' ),
 					'search_users_nonce'          => wp_create_nonce( 'search-users' ),
+					'promoted_jobs_enabled'       => $this->are_promoted_jobs_enabled,
 				]
 			);
 		}
 
-		if ( \WP_Job_Manager_Post_Types::PT_LISTING === $screen->id && $screen->is_block_editor() ) { // Check if it's block editor in job post.
+		if ( \WP_Job_Manager_Post_Types::PT_LISTING === $screen->id && $screen->is_block_editor() && $this->are_promoted_jobs_enabled ) { // Check if it's block editor in job post.
 			$post = get_post();
 
 			if ( ! empty( $post ) ) {

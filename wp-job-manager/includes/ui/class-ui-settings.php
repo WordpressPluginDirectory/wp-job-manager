@@ -21,7 +21,7 @@ if ( ! defined( 'ABSPATH' ) ) {
  *
  * @internal
  */
-class UISettings {
+class UI_Settings {
 
 	use Singleton;
 
@@ -91,7 +91,6 @@ class UISettings {
 					[
 						'url'   => '/',
 						'label' => 'Sign in',
-						'class' => [],
 					],
 				],
 			]
@@ -139,12 +138,10 @@ class UISettings {
 					[
 						'url'   => '/',
 						'label' => 'Sign in',
-						'class' => [],
 					],
 					[
 						'url'   => '/',
 						'label' => 'Create Account',
-						'class' => [],
 					],
 				],
 			]
@@ -333,5 +330,3 @@ class UISettings {
 
 	}
 }
-
-UISettings::instance();

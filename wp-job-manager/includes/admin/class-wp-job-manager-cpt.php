@@ -263,7 +263,7 @@ class WP_Job_Manager_CPT {
 				'post_status' => 'publish',
 			];
 			wp_update_post( $job_data );
-			wp_safe_redirect( remove_query_arg( 'approve_job', add_query_arg( 'handled_jobs', $post_id, add_query_arg( 'action_performed', 'approve_jobs', admin_url( 'edit.php?post_type=job_listing' ) ) ) ) );
+			wp_safe_redirect( remove_query_arg( 'approve_job', add_query_arg( [ 'handled_jobs' => [ $post_id ] ], add_query_arg( 'action_performed', 'approve_jobs', admin_url( 'edit.php?post_type=job_listing' ) ) ) ) );
 			exit;
 		}
 	}
@@ -446,6 +446,7 @@ class WP_Job_Manager_CPT {
 	 */
 	public function post_updated_messages( $messages ) {
 		global $post, $post_ID, $wp_post_types;
+		$wp_date_format = get_option( 'date_format' ) ?: JOB_MANAGER_DATE_FORMAT_FALLBACK;
 
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- No changes based on input.
 		$revision_title = isset( $_GET['revision'] ) ? wp_post_revision_title( (int) $_GET['revision'], false ) : false;
@@ -470,7 +471,7 @@ class WP_Job_Manager_CPT {
 				// translators: %1$s is the singular name of the post type; %2$s is the date the post will be published; %3$s is the URL to preview the listing.
 				__( '%1$s scheduled for: <strong>%2$s</strong>. <a target="_blank" href="%3$s">Preview</a>', 'wp-job-manager' ),
 				$wp_post_types[ \WP_Job_Manager_Post_Types::PT_LISTING ]->labels->singular_name,
-				wp_date( get_option( 'date_format' ) . ' @ ' . get_option( 'time_format' ), get_post_timestamp() ),
+				wp_date( $wp_date_format . ' @ ' . get_option( 'time_format' ), get_post_timestamp() ),
 				esc_url( get_permalink( $post_ID ) )
 			),
 			// translators: %1$s is the singular name of the job listing post type; %2$s is the URL to view the listing.
@@ -544,39 +545,7 @@ class WP_Job_Manager_CPT {
 			unset( $actions['inline hide-if-no-js'] );
 			unset( $actions['trash'] );
 
-			$admin_actions = [];
-
-			if ( in_array( $post->post_status, [ 'pending', 'pending_payment' ], true ) && current_user_can( 'publish_post', $post->ID ) ) {
-				$admin_actions['approve'] = [
-					'action' => 'approved',
-					'name'   => __( 'Approve', 'wp-job-manager' ),
-					'url'    => wp_nonce_url( add_query_arg( 'approve_job', $post->ID ), 'approve_job' ),
-				];
-			}
-			if ( 'trash' !== $post->post_status ) {
-				if ( current_user_can( 'read_post', $post->ID ) ) {
-					$admin_actions['view'] = [
-						'action' => 'view',
-						'name'   => __( 'View', 'wp-job-manager' ),
-						'url'    => get_permalink( $post->ID ),
-					];
-				}
-				if ( current_user_can( 'edit_post', $post->ID ) ) {
-					$admin_actions['edit'] = [
-						'action' => 'edit',
-						'name'   => __( 'Edit', 'wp-job-manager' ),
-						'url'    => get_edit_post_link( $post->ID ),
-					];
-				}
-				if ( current_user_can( 'delete_post', $post->ID ) ) {
-					$admin_actions['delete'] = [
-						'action' => 'delete',
-						'name'   => __( 'Delete', 'wp-job-manager' ),
-						'url'    => get_delete_post_link( $post->ID ),
-					];
-				}
-			}
-			$admin_actions = apply_filters( 'job_manager_admin_actions', $admin_actions, $post );
+			$admin_actions = $this->get_admin_actions( $post );
 
 			foreach ( $admin_actions as $action ) {
 				$actions[ $action['action'] ] = '<a href="' . esc_url( $action['url'] ) . '" title="" rel="permalink">' . esc_html( $action['name'] ) . '</a>';
@@ -587,12 +556,56 @@ class WP_Job_Manager_CPT {
 	}
 
 	/**
+	 * Get the admin actions for a job listing.
+	 *
+	 * @param \WP_Post $post
+	 *
+	 * @return array
+	 */
+	public function get_admin_actions( $post ) {
+		$admin_actions = [];
+
+		if ( in_array( $post->post_status, [ 'pending', 'pending_payment' ], true ) && current_user_can( 'publish_post', $post->ID ) ) {
+			$admin_actions['approve'] = [
+				'action' => 'approved',
+				'name'   => __( 'Approve', 'wp-job-manager' ),
+				'url'    => wp_nonce_url( add_query_arg( 'approve_job', $post->ID ), 'approve_job' ),
+			];
+		}
+		if ( 'trash' !== $post->post_status ) {
+			if ( current_user_can( 'read_post', $post->ID ) ) {
+				$admin_actions['view'] = [
+					'action' => 'view',
+					'name'   => __( 'View', 'wp-job-manager' ),
+					'url'    => get_permalink( $post->ID ),
+				];
+			}
+			if ( current_user_can( 'edit_post', $post->ID ) ) {
+				$admin_actions['edit'] = [
+					'action' => 'edit',
+					'name'   => __( 'Edit', 'wp-job-manager' ),
+					'url'    => get_edit_post_link( $post->ID ),
+				];
+			}
+			if ( current_user_can( 'delete_post', $post->ID ) ) {
+				$admin_actions['delete'] = [
+					'action' => 'delete',
+					'name'   => __( 'Delete', 'wp-job-manager' ),
+					'url'    => get_delete_post_link( $post->ID ),
+				];
+			}
+		}
+		return apply_filters( 'job_manager_admin_actions', $admin_actions, $post );
+	}
+
+	/**
 	 * Displays the content for each custom column on the admin list for Job Listings.
 	 *
 	 * @param mixed $column
 	 */
 	public function custom_columns( $column ) {
 		global $post;
+		$date_format = get_option( 'date_format' ) ?: 'F j, Y';
 
 		switch ( $column ) {
 			case \WP_Job_Manager_Post_Types::TAX_LISTING_TYPE:
@@ -658,14 +671,14 @@ class WP_Job_Manager_CPT {
 				}
 				break;
 			case 'job_posted':
-				echo '<strong>' . esc_html( wp_date( get_option( 'date_format' ), get_post_timestamp() ) ) . '</strong><span>';
+				echo '<strong>' . esc_html( wp_date( $date_format, get_post_timestamp() ) ) . '</strong><span>';
 				// translators: %s placeholder is the username of the user.
 				echo ( empty( $post->post_author ) ? esc_html__( 'by a guest', 'wp-job-manager' ) : sprintf( esc_html__( 'by %s', 'wp-job-manager' ), '<a href="' . esc_url( add_query_arg( 'author', $post->post_author ) ) . '">' . esc_html( get_the_author() ) . '</a>' ) ) . '</span>';
 				break;
 			case 'job_expires':
 				$job_expiration = WP_Job_Manager_Post_Types::instance()->get_job_expiration( $post );
 				if ( $job_expiration ) {
-					echo '<strong>' . esc_html( wp_date( get_option( 'date_format' ), $job_expiration->getTimestamp() ) ) . '</strong>';
+					echo '<strong>' . esc_html( wp_date( $date_format, $job_expiration->getTimestamp() ) ) . '</strong>';
 				} else {
 					echo '&ndash;';
 				}

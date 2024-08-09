@@ -9,6 +9,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+use Pelago\Emogrifier\CssInliner;
+use Pelago\Emogrifier\HtmlProcessor\CssToAttributeConverter;
 /**
  * Base class for WP Job Manager's email notification system.
  *
@@ -164,9 +166,8 @@ final class WP_Job_Manager_Email_Notifications {
 		include_once JOB_MANAGER_PLUGIN_DIR . '/includes/emails/class-wp-job-manager-email-employer-expiring-job.php';
 		include_once JOB_MANAGER_PLUGIN_DIR . '/includes/emails/class-wp-job-manager-email-admin-expiring-job.php';
 
-		if ( ! class_exists( 'Emogrifier' ) && class_exists( 'DOMDocument' ) && version_compare( PHP_VERSION, '5.5', '>=' ) ) {
-			include_once JOB_MANAGER_PLUGIN_DIR . '/lib/emogrifier/class-emogrifier.php';
-		}
+		// Load Vendor Autoload.
+		require_once JOB_MANAGER_PLUGIN_DIR . '/vendor/autoload.php';
 	}
 
 	/**
@@ -311,9 +312,10 @@ final class WP_Job_Manager_Email_Notifications {
 			];
 		}
 
-		$job_expires = WP_Job_Manager_Post_Types::instance()->get_job_expiration( $job );
+		$job_expires    = WP_Job_Manager_Post_Types::instance()->get_job_expiration( $job );
+		$wp_date_format = get_option( 'date_format' ) ?: JOB_MANAGER_DATE_FORMAT_FALLBACK;
 		if ( ! empty( $job_expires ) ) {
-			$job_expires_str       = wp_date( get_option( 'date_format' ), $job_expires->getTimestamp() );
+			$job_expires_str       = wp_date( $wp_date_format, $job_expires->getTimestamp() );
 			$fields['job_expires'] = [
 				'label' => __( 'Listing expires', 'wp-job-manager' ),
 				'value' => $job_expires_str,
@@ -469,6 +471,7 @@ final class WP_Job_Manager_Email_Notifications {
 				'label'        => false,
 				'std'          => self::get_email_setting_defaults( $email_notification_key ),
 				'settings'     => self::get_email_setting_fields( $email_notification_key ),
+				'track'        => 'bool',
 			];
 		}
 
@@ -844,18 +847,10 @@ final class WP_Job_Manager_Email_Notifications {
 				continue;
 			}
 
-			$set_alt_body = function( $mailer ) use ( $content_plain ) {
-				// phpcs:ignore WordPress.NamingConventions.ValidVariableName.UsedPropertyNotSnakeCase
-				$mailer->AltBody = $content_plain;
-
-				return $mailer;
-			};
-
-			$set_content_type = fn() => 'multipart/alternative';
+			$set_content_type = fn() => 'text/html';
 
 			if ( ! $is_plain_text_only ) {
 				add_filter( 'wp_mail_content_type', $set_content_type );
-				add_filter( 'phpmailer_init', $set_alt_body );
 			}
 
 			if ( wp_mail( $to_email, $args['subject'], $body, $headers, $args['attachments'] ) ) {
@@ -863,15 +858,6 @@ final class WP_Job_Manager_Email_Notifications {
 			}
 
 			remove_filter( 'wp_mail_content_type', $set_content_type );
-			remove_filter( 'phpmailer_init', $set_alt_body );
-
-			// Make sure AltBody is not sticking around for a different email.
-			global $phpmailer;
-
-			if ( $phpmailer instanceof \PHPMailer\PHPMailer\PHPMailer ) {
-				// phpcs:ignore WordPress.NamingConventions.ValidVariableName.UsedPropertyNotSnakeCase
-				$phpmailer->AltBody = '';
-			}
 		}
 
 		$job_manager_doing_email = false;
@@ -948,10 +934,11 @@ final class WP_Job_Manager_Email_Notifications {
 	 * @return string
 	 */
 	private static function inject_styles( $content ) {
-		if ( class_exists( 'Emogrifier' ) ) {
+		if ( class_exists( CssInliner::class ) ) {
 			try {
-				$emogrifier = new Emogrifier( $content, self::get_styles() );
-				$content    = $emogrifier->emogrify();
+				$dom_document = CssInliner::fromHtml( $content )->inlineCss( self::get_styles() )->getDomDocument();
+				$content      = CssToAttributeConverter::fromDomDocument( $dom_document )->convertCssToVisualAttributes()->render();
+
 			} catch ( Exception $e ) {
 				trigger_error( 'Unable to inject styles into email notification: ' . $e->getMessage() ); // @codingStandardsIgnoreLine
 			}
@@ -962,12 +949,12 @@ final class WP_Job_Manager_Email_Notifications {
 	/**
 	 * Gets the CSS styles to be used in email notifications.
 	 *
-	 * @return bool|string
+	 * @return string
 	 */
 	private static function get_styles() {
 		$email_styles_template = self::locate_template_file( 'email-styles' );
 		if ( ! file_exists( $email_styles_template ) ) {
-			return false;
+			return '';
 		}
 		ob_start();
 		include $email_styles_template;
