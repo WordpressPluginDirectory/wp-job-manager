@@ -63,8 +63,9 @@ class WP_Job_Manager_Widget extends WP_Widget {
 	 */
 	public function register() {
 		$widget_ops = [
-			'classname'   => $this->widget_cssclass,
-			'description' => $this->widget_description,
+			'classname'             => $this->widget_cssclass,
+			'description'           => $this->widget_description,
+			'show_instance_in_rest' => true,
 		];
 
 		parent::__construct( $this->widget_id, $this->widget_name, $widget_ops );
@@ -81,6 +82,10 @@ class WP_Job_Manager_Widget extends WP_Widget {
 	 * @return bool
 	 */
 	public function get_cached_widget( $args ) {
+		if ( empty( $args['widget_id'] ) ) {
+			return false;
+		}
+
 		$cache = wp_cache_get( $this->widget_id, 'widget' );
 
 		if ( ! is_array( $cache ) ) {
@@ -102,6 +107,10 @@ class WP_Job_Manager_Widget extends WP_Widget {
 	 * @param string $content
 	 */
 	public function cache_widget( $args, $content ) {
+		if ( empty( $args['widget_id'] ) ) {
+			return;
+		}
+
 		$cache = wp_cache_get( $this->widget_id, 'widget' );
 
 		if ( ! is_array( $cache ) ) {

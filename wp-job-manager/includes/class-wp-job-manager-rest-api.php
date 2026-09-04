@@ -22,6 +22,158 @@ class WP_Job_Manager_REST_API {
 	 */
 	public static function init() {
 		add_filter( 'rest_prepare_job_listing', [ __CLASS__, 'prepare_job_listing' ], 10, 2 );
+		add_filter( 'rest_job_listing_query', [ __CLASS__, 'exclude_filled_from_query' ], 10, 2 );
+		add_filter( 'rest_request_before_callbacks', [ __CLASS__, 'gate_view_capability_for_single' ], 10, 3 );
+		add_filter( 'rest_post_search_query', [ __CLASS__, 'gate_search_query_for_listings' ], 10, 2 );
+	}
+
+	/**
+	 * Withholds `job_listing` results from the generic WordPress REST Search endpoint
+	 * (`/wp/v2/search`) for a viewer denied by the browse or View Job Capability options.
+	 *
+	 * The search controller runs its own query and never reaches the single-item route
+	 * gate ({@see gate_view_capability_for_single()}) or the job_listing collection gate
+	 * ({@see exclude_filled_from_query()}), so without this a denied viewer can enumerate
+	 * restricted listings — id, title, url — and use the search term as a content oracle.
+	 *
+	 * When the viewer is denied, the `job_listing` post type is dropped from the searched
+	 * types so other requested subtypes (posts, pages) are unaffected; if it was the only
+	 * requested type the query is forced to return nothing. Password-protected listings are
+	 * already excluded from search by WP core, so only the view-capability boundary is
+	 * handled here.
+	 *
+	 * Note: this is intentionally stricter than the single-item route and the feed gate. Both
+	 * of those let a denied *author* still reach their own listings — the single route via
+	 * {@see job_manager_user_can_view_job_listing()}, the feed via `author__in => [ user_id ]`.
+	 * That cannot be mirrored here: the search handler runs one WP_Query across every requested
+	 * subtype, so an `author__in` constraint would also restrict the viewer's posts and pages,
+	 * and per-listing filtering of the results would desync the handler's `found_posts` pagination
+	 * (itself an oracle). A denied author therefore does not see their own listings through generic
+	 * search; their own listings remain reachable via the job dashboard and the single-item route.
+	 *
+	 * @param array           $query_args WP_Query args the search handler will run.
+	 * @param WP_REST_Request $request    The REST search request.
+	 * @return array
+	 */
+	public static function gate_search_query_for_listings( $query_args, $request ) {
+		$post_types = isset( $query_args['post_type'] ) ? (array) $query_args['post_type'] : [];
+		if ( ! in_array( WP_Job_Manager_Post_Types::PT_LISTING, $post_types, true ) ) {
+			return $query_args;
+		}
+
+		$denied = ! job_manager_user_can_browse_job_listings()
+			|| WP_Job_Manager_Post_Types::viewer_denied_by_view_cap();
+		if ( ! $denied ) {
+			return $query_args;
+		}
+
+		$remaining = array_values( array_diff( $post_types, [ WP_Job_Manager_Post_Types::PT_LISTING ] ) );
+		if ( $remaining ) {
+			// Other subtypes were requested too — keep searching those, just not listings.
+			$query_args['post_type'] = $remaining;
+		} else {
+			// Listings were the only requested type. Post IDs are never 0, so this is a safe
+			// empty sentinel.
+			$query_args['post__in'] = [ 0 ];
+		}
+
+		return $query_args;
+	}
+
+	/**
+	 * Returns 404 for GET requests to a single job listing when the current user is
+	 * denied by the `job_manager_view_job_listing_capability` option. Mirrors WP core's
+	 * "post not found" shape so the existence of restricted listings is not revealed.
+	 *
+	 * The view-capability check is the only gate. For view-cap-*passing* users on
+	 * password-protected listings the request continues and WP core's controller +
+	 * `prepare_job_listing()` produce the password contract (200 + `content.protected`)
+	 * downstream. View-cap-*failing* users always get 404, even on password-protected
+	 * listings — otherwise the password envelope would itself reveal that the listing
+	 * exists at that ID. Author and `preview` short-circuits live inside
+	 * `job_manager_user_can_view_job_listing()`.
+	 *
+	 * @param mixed           $response Result from the dispatched request, prior to invoking the callback.
+	 * @param array           $handler  Route handler used for the request.
+	 * @param WP_REST_Request $request  Request used to generate the response.
+	 * @return mixed
+	 */
+	public static function gate_view_capability_for_single( $response, $handler, $request ) {
+		if ( is_wp_error( $response ) ) {
+			return $response;
+		}
+		// HEAD falls back to the GET handler in WP_REST_Server but keeps `HEAD` as the method;
+		// without HEAD coverage a status-code probe (200 empty body vs 404) could distinguish
+		// a restricted listing from a missing one.
+		if ( ! in_array( $request->get_method(), [ 'GET', 'HEAD' ], true ) ) {
+			return $response;
+		}
+		// Match the item route and its children (revisions, autosaves) — all of them can
+		// surface listing body data and must be gated on the parent post's view capability.
+		if ( ! preg_match( '#^/wp/v2/job-listings/(?P<id>\d+)(?:/[^?]*)?$#', (string) $request->get_route(), $matches ) ) {
+			return $response;
+		}
+		$post_id = absint( $matches['id'] );
+		if ( ! $post_id ) {
+			return $response;
+		}
+		$post = get_post( $post_id );
+		if ( ! $post || WP_Job_Manager_Post_Types::PT_LISTING !== $post->post_type ) {
+			return $response;
+		}
+		if ( job_manager_user_can_view_job_listing( $post_id ) ) {
+			return $response;
+		}
+
+		return new WP_Error(
+			'rest_post_invalid_id',
+			// String mirrors WP core's WP_REST_Posts_Controller so a denied viewer cannot
+			// distinguish this 404 from a missing-post 404.
+			__( 'Invalid post ID.' ), // phpcs:ignore WordPress.WP.I18n.MissingArgDomain
+			[ 'status' => 404 ]
+		);
+	}
+
+	/**
+	 * Excludes filled job listings from REST API query results, and short-circuits the query when
+	 * the requester does not have the browse-listings capability.
+	 *
+	 * @param array           $args    Array of query arguments.
+	 * @param WP_REST_Request $request The REST API request.
+	 * @return array
+	 */
+	public static function exclude_filled_from_query( $args, $request ) {
+		// Browse-capability gate — match the same denial the [jobs] shortcode applies, but without surfacing a 403.
+		if ( ! job_manager_user_can_browse_job_listings() ) {
+			$args['post__in'] = [ 0 ];
+			return $args;
+		}
+
+		// Password-protected listings are excluded from REST collections regardless of post-type config.
+		$args['has_password'] = false;
+
+		if ( 1 !== absint( get_option( 'job_manager_hide_filled_positions' ) ) ) {
+			return $args;
+		}
+
+		if ( ! isset( $args['meta_query'] ) ) {
+			$args['meta_query'] = []; // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_query -- Empty.
+		}
+
+		$args['meta_query'][] = [
+			'relation' => 'OR',
+			[
+				'key'     => '_filled',
+				'value'   => '1',
+				'compare' => '!=',
+			],
+			[
+				'key'     => '_filled',
+				'compare' => 'NOT EXISTS',
+			],
+		];
+
+		return $args;
 	}
 
 	/**
@@ -38,6 +190,67 @@ class WP_Job_Manager_REST_API {
 
 		if ( ! isset( $data['meta'] ) ) {
 			$data['meta'] = [];
+		}
+
+		// View-capability denials are normally short-circuited to 404 in
+		// gate_view_capability_for_single() before we reach this filter. Keep the blanking
+		// path as defense-in-depth for any code path that still reaches here (collection
+		// responses, third-party callers re-running this filter), and for password-protected
+		// listings where the WP contract is 200 + content.protected so clients can render a
+		// password form. Title / link / slug / featured-media references can themselves carry
+		// sensitive information so we blank them too.
+		$is_password_blocked = post_password_required( $post );
+		$is_viewcap_blocked  = ! job_manager_user_can_view_job_listing( $post->ID );
+		$is_blocked          = $is_password_blocked || $is_viewcap_blocked;
+
+		// An edit-capable user hitting a *password-only* protected listing legitimately needs
+		// the raw fields and editor metadata to operate Gutenberg (WP core's controller permits
+		// the request precisely because of edit_post). WP core itself still blanks
+		// `content.rendered`, which is enough for the password contract. View-capability
+		// denials do NOT get this bypass — they are the harder gate.
+		$bypass_for_editor = $is_password_blocked && ! $is_viewcap_blocked
+			&& current_user_can( 'edit_post', $post->ID );
+
+		if ( $is_blocked && ! $bypass_for_editor ) {
+			if ( isset( $data['title']['rendered'] ) ) {
+				$data['title']['rendered'] = '';
+			}
+			if ( isset( $data['title']['raw'] ) ) {
+				$data['title']['raw'] = '';
+			}
+			if ( isset( $data['content']['rendered'] ) ) {
+				$data['content']['rendered'] = '';
+			}
+			if ( isset( $data['content']['raw'] ) ) {
+				$data['content']['raw'] = '';
+			}
+			if ( isset( $data['content'] ) && is_array( $data['content'] ) ) {
+				$data['content']['protected'] = true;
+			}
+			if ( isset( $data['excerpt']['rendered'] ) ) {
+				$data['excerpt']['rendered'] = '';
+			}
+			if ( isset( $data['excerpt']['raw'] ) ) {
+				$data['excerpt']['raw'] = '';
+			}
+			if ( array_key_exists( 'link', $data ) ) {
+				unset( $data['link'] );
+			}
+			if ( array_key_exists( 'slug', $data ) ) {
+				$data['slug'] = '';
+			}
+			if ( array_key_exists( 'featured_media', $data ) ) {
+				$data['featured_media'] = 0;
+			}
+			// Links live on WP_REST_Response's private $links property and are merged into the
+			// serialized `_links` block later by WP_REST_Server::response_to_data(); they are not
+			// present in $data at this point, so remove_link() is the only effective way to drop
+			// the featured-media link before serialization.
+			$response->remove_link( 'https://api.w.org/featuredmedia' );
+			$data['meta'] = [];
+			$response->set_data( $data );
+
+			return $response;
 		}
 
 		foreach ( $data['meta'] as $meta_key => $meta_value ) {

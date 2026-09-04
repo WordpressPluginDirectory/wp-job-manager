@@ -146,6 +146,28 @@ class WP_Job_Manager_Shortcodes {
 	}
 
 	/**
+	 * Handles actions which need to be run before the shortcode e.g. post actions.
+	 *
+	 * @deprecated 2.4.1 - Moved to Job_Dashboard_Shortcode.
+	 */
+	public function shortcode_action_handler() {
+		_deprecated_function( __METHOD__, '2.4.1', 'Job_Dashboard_Shortcode::handle_actions' );
+		Job_Dashboard_Shortcode::instance()->handle_actions();
+	}
+
+	/**
+	 * Handles actions on job dashboard.
+	 *
+	 * @throws Exception On action handling error.
+	 *
+	 * @deprecated 2.4.1 - Moved to Job_Dashboard_Shortcode.
+	 */
+	public function job_dashboard_handler() {
+		_deprecated_function( __METHOD__, '2.4.1', 'Job_Dashboard_Shortcode::handle_actions' );
+		Job_Dashboard_Shortcode::instance()->handle_actions();
+	}
+
+	/**
 	 * Displays edit job form.
 	 *
 	 * @deprecated 2.3.0 - Moved to Job_Dashboard_Shortcode.
@@ -193,6 +215,7 @@ class WP_Job_Manager_Shortcodes {
 					'filled'                    => null, // True to show only filled, false to hide filled, leave null to show both/use the settings.
 					'remote_position'           => null, // True to show only remote, false to hide remote, leave null to show both.
 					'featured_first'            => false, // True to show featured first, false to show in default order.
+					'author'                    => '', // Limit listings to a specific author by user ID. Empty string shows all.
 
 					// Default values for filters.
 					'location'                  => '',
@@ -215,6 +238,7 @@ class WP_Job_Manager_Shortcodes {
 		$atts['show_more']                 = $this->string_to_bool( $atts['show_more'] );
 		$atts['show_pagination']           = $this->string_to_bool( $atts['show_pagination'] );
 		$atts['featured_first']            = $this->string_to_bool( $atts['featured_first'] );
+		$atts['author']                    = sanitize_text_field( $atts['author'] );
 
 		if ( ! is_null( $atts['featured'] ) ) {
 			$atts['featured'] = ( is_bool( $atts['featured'] ) && $atts['featured'] ) || in_array( $atts['featured'], [ 1, '1', 'true', 'yes' ], true );
@@ -327,6 +351,7 @@ class WP_Job_Manager_Shortcodes {
 						'filled'            => $atts['filled'],
 						'remote_position'   => $atts['remote_position'],
 						'featured_first'    => $atts['featured_first'],
+						'author'            => $atts['author'],
 					]
 				)
 			);
@@ -369,6 +394,9 @@ class WP_Job_Manager_Shortcodes {
 		}
 		if ( ! empty( $atts['post_status'] ) ) {
 			$data_attributes['post_status'] = implode( ',', $atts['post_status'] );
+		}
+		if ( ! empty( $atts['author'] ) ) {
+			$data_attributes['author'] = $atts['author'];
 		}
 
 		$data_attributes['post_id'] = isset( $GLOBALS['post'] ) ? $GLOBALS['post']->ID : 0;
@@ -470,7 +498,12 @@ class WP_Job_Manager_Shortcodes {
 		if ( $jobs->have_posts() ) {
 			while ( $jobs->have_posts() ) {
 				$jobs->the_post();
-				echo '<h1>' . wp_kses_post( wpjm_get_the_job_title() ) . '</h1>';
+				// Only emit the title when the listing is actually viewable. This mirrors the gate in
+				// content-single-job_listing.php so a password-protected (or capability-restricted)
+				// listing doesn't leak its title via the H1 before the template's access-denied notice.
+				if ( ( ! post_password_required() || is_super_admin() ) && job_manager_user_can_view_job_listing( get_the_ID() ) ) {
+					echo '<h1>' . wp_kses_post( wpjm_get_the_job_title() ) . '</h1>';
+				}
 				get_job_manager_template_part( 'content-single', \WP_Job_Manager_Post_Types::PT_LISTING );
 			}
 		}
@@ -572,6 +605,11 @@ class WP_Job_Manager_Shortcodes {
 		if ( $jobs->have_posts() ) {
 			while ( $jobs->have_posts() ) {
 				$jobs->the_post();
+				// Don't expose application details for a password-protected listing (same guard as
+				// WP_Job_Manager_Post_Types::job_content()); the [job_apply] shortcode bypasses that filter.
+				if ( post_password_required() && ! is_super_admin() ) {
+					continue;
+				}
 				$apply = get_the_job_application_method();
 				do_action( 'job_manager_before_job_apply_' . absint( $id ) );
 				if ( apply_filters( 'job_manager_show_job_apply_' . absint( $id ), true ) ) {
@@ -586,6 +624,36 @@ class WP_Job_Manager_Shortcodes {
 
 		return ob_get_clean();
 	}
+
+	/**
+	 * Add expiration details to the job dashboard date column.
+	 *
+	 * @param \WP_Post $job
+	 *
+	 * @deprecated 2.4.1 - Moved to Job_Dashboard_Shortcode.
+	 *
+	 * @output string
+	 */
+	public function job_dashboard_date_column_expires( $job ) {
+		_deprecated_function( __METHOD__, '2.4.1', 'Job_Dashboard_Shortcode::the_expiration_date' );
+		Job_Dashboard_Shortcode::instance()->the_expiration_date( $job );
+	}
+
+	/**
+	 * Add job status to the job dashboard title column.
+	 *
+	 * @param \WP_Post $job
+	 *
+	 * @deprecated 2.4.1 - Moved to Job_Dashboard_Shortcode.
+	 *
+	 * @output string
+	 */
+	public function job_dashboard_title_column_status( $job ) {
+		_deprecated_function( __METHOD__, '2.4.1', 'Job_Dashboard_Shortcode::the_job_status' );
+		Job_Dashboard_Shortcode::instance()->the_status( $job );
+	}
+
+
 
 }
 

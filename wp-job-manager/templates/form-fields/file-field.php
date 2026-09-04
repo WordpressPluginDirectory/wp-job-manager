@@ -8,7 +8,7 @@
  * @author      Automattic
  * @package     wp-job-manager
  * @category    Template
- * @version     1.33.0
+ * @version     2.4.6
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -16,7 +16,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 $classes            = [ 'input-text' ];
-$allowed_mime_types = array_keys( ! empty( $field['allowed_mime_types'] ) ? $field['allowed_mime_types'] : get_allowed_mime_types() );
+$allowed_mime_types = ! empty( $field['allowed_mime_types'] ) ? $field['allowed_mime_types'] : job_manager_get_allowed_mime_types( $key );
+$allowed_extensions = array_keys( $allowed_mime_types );
+$accept_file_types  = job_manager_get_accept_file_types( $allowed_mime_types );
 $field_name         = isset( $field['name'] ) ? $field['name'] : $key;
 $field_name         .= ! empty( $field['multiple'] ) ? '[]' : '';
 $file_limit         = false;
@@ -45,8 +47,10 @@ if ( ! empty( $field['ajax'] ) && job_manager_user_can_upload_file_via_ajax() ) 
 <input
 	type="file"
 	class="<?php echo esc_attr( implode( ' ', $classes ) ); ?>"
-	data-file_types="<?php echo esc_attr( implode( '|', $allowed_mime_types ) ); ?>"
-	<?php if ( ! empty( $field['multiple'] ) ) echo 'multiple'; ?>
+	data-file_types="<?php echo esc_attr( implode( '|', $allowed_extensions ) ); ?>"
+	<?php if ( '' !== $accept_file_types ) echo ' accept="' . esc_attr( $accept_file_types ) . '"'; ?>
+	<?php if ( ! empty( $field['required'] ) ) echo ' required'; ?>
+	<?php if ( ! empty( $field['multiple'] ) ) echo ' multiple'; ?>
 	<?php if ( $file_limit ) echo ' data-file_limit="' . absint( $file_limit ) . '"';?>
 	<?php if ( ! empty( $field['file_limit_message'] ) ) echo ' data-file_limit_message="' . esc_attr( $field['file_limit_message'] ) . '"';?>
 	name="<?php echo esc_attr( isset( $field['name'] ) ? $field['name'] : $key ); ?><?php if ( ! empty( $field['multiple'] ) ) echo '[]'; ?>"
@@ -55,8 +59,10 @@ if ( ! empty( $field['ajax'] ) && job_manager_user_can_upload_file_via_ajax() ) 
 />
 <small class="description">
 	<?php if ( ! empty( $field['description'] ) ) : ?>
-		<?php echo wp_kses_post( $field['description'] ); ?>
-	<?php else : ?>
-		<?php printf( esc_html__( 'Maximum file size: %s.', 'wp-job-manager' ), size_format( wp_max_upload_size() ) ); ?>
+		<?php echo wp_kses_post( $field['description'] ); ?><br>
 	<?php endif; ?>
+	<?php
+	$max_size = ! empty( $field['max_size'] ) ? (int) $field['max_size'] : wp_max_upload_size();
+	printf( esc_html__( 'Maximum file size: %s.', 'wp-job-manager' ), size_format( $max_size ) );
+	?>
 </small>

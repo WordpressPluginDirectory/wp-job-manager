@@ -12,7 +12,12 @@ if ( ! function_exists( 'get_job_listings' ) ) :
 	 * Queries job listings with certain criteria and returns them.
 	 *
 	 * @since 1.0.5
-	 * @param string|array|object $args Arguments used to retrieve job listings.
+	 * @param string|array|object $args {
+	 *     Arguments used to retrieve job listings.
+	 *
+	 *     @type int|string|int[] $author Optional. User ID, comma-separated user IDs, or array of user IDs to filter listings by author. Omit or pass an empty string for no filter. A supplied value that yields no valid positive integer IDs (e.g. `'0'`, `'abc'`, `[]`) fails closed and returns zero results.
+	 *                                    @since 2.4.3
+	 * }
 	 * @return WP_Query
 	 */
 	function get_job_listings( $args = [] ) {
@@ -69,6 +74,7 @@ if ( ! function_exists( 'get_job_listings' ) ) :
 			'update_post_meta_cache' => false,
 			'cache_results'          => false,
 			'fields'                 => $args['fields'],
+			'has_password'           => false,
 		];
 
 		if ( $args['posts_per_page'] < 0 ) {
@@ -155,13 +161,43 @@ if ( ! function_exists( 'get_job_listings' ) ) :
 		}
 
 		if ( ! empty( $args['search_categories'] ) ) {
-			$field                     = is_numeric( $args['search_categories'][0] ) ? 'term_id' : 'slug';
-			$operator                  = 'all' === get_option( 'job_manager_category_filter_type', 'all' ) && count( $args['search_categories'] ) > 1 ? 'AND' : 'IN';
+			$field    = is_numeric( $args['search_categories'][0] ) ? 'term_id' : 'slug';
+			$operator = 'all' === get_option( 'job_manager_category_filter_type', 'all' ) && count( $args['search_categories'] ) > 1 ? 'AND' : 'IN';
+
+			/**
+			 * Filters whether category queries include child terms. Return `false` to
+			 * match only listings assigned to the exact terms selected, excluding their
+			 * children. Applies to category queries built by get_job_listings(),
+			 * regardless of the "Category Filter Type" setting; other queries such as
+			 * the job feed are unaffected. The default keeps the existing behavior.
+			 *
+			 * Check `$operator` before forcing `true`. Under `AND`, WordPress expands
+			 * each selected term to its descendants and then requires a listing to
+			 * match all of them, so children narrow the result set rather than widening
+			 * it; if one selected term is an ancestor of another, the clause is
+			 * discarded entirely and the query returns nothing.
+			 *
+			 * @since 2.4.6
+			 *
+			 * @param bool   $include_children  Whether to include child terms of the selected categories.
+			 * @param string $operator          The tax query operator in use (`IN` or `AND`).
+			 * @param array  $search_categories The category terms being queried (term IDs or slugs).
+			 * @param array  $args              The full arguments passed to get_job_listings().
+			 * @return bool
+			 */
+			$include_children = (bool) apply_filters(
+				'job_manager_get_listings_include_category_children',
+				'AND' !== $operator,
+				$operator,
+				$args['search_categories'],
+				$args
+			);
+
 			$query_args['tax_query'][] = [
 				'taxonomy'         => \WP_Job_Manager_Post_Types::TAX_LISTING_CATEGORY,
 				'field'            => $field,
 				'terms'            => array_values( $args['search_categories'] ),
-				'include_children' => 'AND' !== $operator,
+				'include_children' => $include_children,
 				'operator'         => $operator,
 			];
 		}
@@ -190,6 +226,18 @@ if ( ! function_exists( 'get_job_listings' ) ) :
 				'menu_order'           => 'ASC',
 				$query_args['orderby'] => $query_args['order'],
 			];
+		}
+
+		if ( isset( $args['author'] ) ) {
+			$author_ids = _wpjm_parse_author_ids( $args['author'] );
+			if ( [ 0 ] === $author_ids ) {
+				// The author filter was supplied but yielded no valid IDs. Fail closed via
+				// post__in: a listing can legitimately have post_author 0, so author__in => [0]
+				// would match orphaned listings instead of excluding them.
+				$query_args['post__in'] = [ 0 ];
+			} elseif ( null !== $author_ids ) {
+				$query_args['author__in'] = $author_ids;
+			}
 		}
 
 		$job_manager_keyword = sanitize_text_field( $args['search_keywords'] );
@@ -222,7 +270,8 @@ if ( ! function_exists( 'get_job_listings' ) ) :
 		// Cache results.
 		if ( apply_filters( 'get_job_listings_cache_results', $should_cache ) ) {
 			$to_hash            = wp_json_encode( $query_args );
-			$query_args_hash    = 'jm_' . md5( $to_hash . JOB_MANAGER_VERSION ) . WP_Job_Manager_Cache_Helper::get_transient_version( 'get_job_listings' );
+			$auth_state         = is_user_logged_in() ? 'u' . get_current_user_id() : 'anon';
+			$query_args_hash    = 'jm_' . md5( $to_hash . JOB_MANAGER_VERSION . $auth_state ) . WP_Job_Manager_Cache_Helper::get_transient_version( 'get_job_listings' );
 			$result             = false;
 			$cached_query_posts = get_transient( $query_args_hash );
 			if ( is_string( $cached_query_posts ) ) {
@@ -269,6 +318,54 @@ if ( ! function_exists( 'get_job_listings' ) ) :
 		remove_filter( 'posts_search', 'get_job_listings_keyword_search', 10 );
 
 		return $result;
+	}
+endif;
+
+if ( ! function_exists( '_wpjm_parse_author_ids' ) ) :
+	/**
+	 * Parse a raw author input (string, comma-separated string, integer, or array) into a list of positive user IDs.
+	 *
+	 * Returns `null` when the input represents "no filter" (the input was unset or an empty string).
+	 * Returns `[0]` as a fail-closed sentinel when the input was supplied but yielded no valid positive IDs
+	 * (e.g. `'0'`, `'abc'`, `[]`, `'-5'`). Callers must treat the `[0]` sentinel as "match nothing" and fail
+	 * closed via `post__in => [0]`, NOT `author__in => [0]`: a listing can legitimately have `post_author` 0,
+	 * which `author__in => [0]` would match.
+	 *
+	 * @since 2.4.3
+	 * @access private
+	 *
+	 * @param mixed $raw Raw author input.
+	 * @return array|null Array of positive integer user IDs, `[0]` sentinel, or null for "no filter".
+	 */
+	function _wpjm_parse_author_ids( $raw ) {
+		if ( null === $raw ) {
+			return null;
+		}
+
+		if ( is_array( $raw ) ) {
+			$tokens = $raw;
+		} else {
+			$raw = (string) $raw;
+			if ( '' === $raw ) {
+				return null;
+			}
+			$tokens = explode( ',', $raw );
+		}
+
+		$author_ids = array_values(
+			array_filter(
+				array_map(
+					static function ( $v ) {
+						$s = trim( (string) $v );
+						return ctype_digit( $s ) && (int) $s > 0 ? (int) $s : 0;
+					},
+					$tokens
+				),
+				static fn( $v ) => $v > 0
+			)
+		);
+
+		return ! empty( $author_ids ) ? $author_ids : [ 0 ];
 	}
 endif;
 
@@ -468,9 +565,6 @@ if ( ! function_exists( 'get_job_listings_keyword_search' ) ) :
 
 		if ( ! empty( $new_search ) ) {
 			$new_search = " AND ({$new_search}) ";
-			if ( ! is_user_logged_in() ) {
-				$new_search .= " AND ({$wpdb->posts}.post_password = '') ";
-			}
 		} else {
 			return $search;
 		}
@@ -630,6 +724,7 @@ if ( ! function_exists( 'job_manager_get_filtered_links' ) ) :
 								'search_location' => $args['search_location'],
 								'job_categories'  => implode( ',', $job_categories ),
 								'search_keywords' => $args['search_keywords'],
+								'author'          => ! empty( $args['author'] ) ? $args['author'] : '',
 							]
 						)
 					),
@@ -1471,6 +1566,20 @@ function job_manager_prepare_uploaded_files( $file_data ) {
 }
 
 /**
+ * Returns the maximum allowed file size for company logo uploads, in bytes.
+ *
+ * Returns the value configured in settings (converted from KB), or falls back
+ * to the server's upload limit when no custom value is set.
+ *
+ * @since 2.4.3
+ * @return int Maximum file size in bytes.
+ */
+function job_manager_get_company_logo_max_size(): int {
+	$max_size_kb = (int) get_option( 'job_manager_company_logo_max_size', 0 );
+	return $max_size_kb > 0 ? $max_size_kb * KB_IN_BYTES : wp_max_upload_size();
+}
+
+/**
  * Uploads a file using WordPress file API.
  *
  * @since 1.21.0
@@ -1520,6 +1629,20 @@ function job_manager_upload_file( $file, $args = [] ) {
 		return $file;
 	}
 
+	if ( 'company_logo' === $args['file_key'] ) {
+		$max_size = job_manager_get_company_logo_max_size();
+		if ( $file['size'] > $max_size ) {
+			return new WP_Error(
+				'upload',
+				sprintf(
+					// translators: %s is the maximum allowed file size.
+					__( 'The company logo exceeds the maximum allowed file size of %s.', 'wp-job-manager' ),
+					size_format( $max_size )
+				)
+			);
+		}
+	}
+
 	if ( ! in_array( $file['type'], $allowed_mime_types, true ) ) {
 		// Replace pipe separating similar extensions (e.g. jpeg|jpg) to comma to match the list separator.
 		$allowed_file_extensions = implode( ', ', str_replace( '|', ', ', array_keys( $allowed_mime_types ) ) );
@@ -1560,11 +1683,15 @@ function job_manager_upload_file( $file, $args = [] ) {
  */
 function job_manager_get_allowed_mime_types( $field = '' ) {
 	if ( 'company_logo' === $field ) {
-		$allowed_mime_types = [
-			'jpg|jpeg|jpe' => 'image/jpeg',
-			'gif'          => 'image/gif',
-			'png'          => 'image/png',
-		];
+		$allowed_mime_types = apply_filters(
+			'job_manager_company_logo_allowed_mime_types',
+			[
+				'jpg|jpeg|jpe' => 'image/jpeg',
+				'gif'          => 'image/gif',
+				'png'          => 'image/png',
+				'webp'         => 'image/webp',
+			]
+		);
 	} else {
 		$allowed_mime_types = [
 			'jpg|jpeg|jpe' => 'image/jpeg',
@@ -1590,6 +1717,45 @@ function job_manager_get_allowed_mime_types( $field = '' ) {
 	 * @param string $field The field key for the upload.
 	 */
 	return apply_filters( 'job_manager_mime_types', $allowed_mime_types, $field );
+}
+
+/**
+ * Builds the value for a file input's `accept` attribute from a map of allowed mime types.
+ *
+ * The map is keyed by pipe-separated file extensions (see `job_manager_get_allowed_mime_types()`), which are
+ * turned into the dot-prefixed extension tokens the `accept` attribute expects. Fields may instead supply a plain
+ * list of mime types, or a map keyed by mime type; those are emitted as mime type tokens, which `accept` also
+ * accepts.
+ *
+ * @since 2.4.6
+ *
+ * @param array $allowed_mime_types Array of allowed file extensions and mime types.
+ * @return string Comma-separated list of `accept` tokens, empty when nothing is allowed.
+ */
+function job_manager_get_accept_file_types( $allowed_mime_types ) {
+	$accept_tokens = [];
+
+	foreach ( (array) $allowed_mime_types as $extensions => $mime_type ) {
+		if ( is_int( $extensions ) || false !== strpos( (string) $extensions, '/' ) ) {
+			$token = is_int( $extensions ) ? $mime_type : $extensions;
+
+			if ( is_string( $token ) && '' !== $token ) {
+				$accept_tokens[] = $token;
+			}
+
+			continue;
+		}
+
+		foreach ( explode( '|', $extensions ) as $extension ) {
+			$extension = ltrim( trim( $extension ), '.' );
+
+			if ( '' !== $extension ) {
+				$accept_tokens[] = '.' . $extension;
+			}
+		}
+	}
+
+	return implode( ',', array_unique( $accept_tokens ) );
 }
 
 /**
@@ -1712,13 +1878,20 @@ function job_manager_duplicate_listing( $post_id ) {
 /**
  * Escape JSON for use on HTML or attribute text nodes.
  *
+ * Do not use for `<script>` element content: script content is raw text, so HTML
+ * entities are never decoded there and end up baked into the payload. Use
+ * `wp_json_encode()` with the `JSON_HEX_*` flags instead.
+ *
  * @since 1.32.2
+ * @deprecated 2.4.7
  *
  * @param string $json JSON to escape.
  * @param bool   $html True if escaping for HTML text node, false for attributes. Determines how quotes are handled.
  * @return string Escaped JSON.
  */
 function wpjm_esc_json( $json, $html = false ) {
+	_deprecated_function( __FUNCTION__, '2.4.7', 'wp_json_encode' );
+
 	return _wp_specialchars(
 		$json,
 		$html ? ENT_NOQUOTES : ENT_QUOTES, // Escape quotes in attribute nodes only.
@@ -1740,8 +1913,11 @@ function job_manager_count_user_job_listings( $user_id = 0 ) {
 		$user_id = get_current_user_id();
 	}
 
+	// `future` counts: a scheduled listing is a committed submission (WP publishes it
+	// via cron with no further check), so excluding it would let a user bypass the
+	// submission limit entirely by giving each listing a scheduled date.
 	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-	return $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(ID) FROM {$wpdb->posts} WHERE post_author = %d AND post_type = 'job_listing' AND post_status IN ( 'publish', 'pending', 'expired', 'hidden' );", $user_id ) );
+	return $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(ID) FROM {$wpdb->posts} WHERE post_author = %d AND post_type = 'job_listing' AND post_status IN ( 'publish', 'pending', 'expired', 'hidden', 'future' );", $user_id ) );
 }
 
 /**
@@ -1854,7 +2030,7 @@ function job_manager_get_salary_unit_options( $include_empty = true ) {
 function job_manager_user_can_submit_job_listing() {
 	$submission_limit = get_option( 'job_manager_submission_limit', '' );
 	$job_count        = job_manager_count_user_job_listings();
-	$can_submit       = '' === $submission_limit || $submission_limit >= $job_count;
+	$can_submit       = '' === $submission_limit || $submission_limit > $job_count;
 	/**
 	 * Filter if the current user can or cannot submit job listings
 	 *
@@ -1863,4 +2039,19 @@ function job_manager_user_can_submit_job_listing() {
 	 * @param boolean $can_submit
 	 */
 	return apply_filters( 'job_manager_user_can_submit_job_listing', $can_submit );
+}
+
+/**
+ * Whether the submission-limit check can ever refuse a listing.
+ *
+ * Must answer: can job_manager_user_can_submit_job_listing() ever return false?
+ * Callers use this to skip work (e.g. the submit form's publish lock) that only
+ * exists to protect that check — keep it in sync with the check's inputs.
+ *
+ * @since 2.4.7
+ *
+ * @return bool
+ */
+function job_manager_user_submission_limit_active() {
+	return '' !== get_option( 'job_manager_submission_limit', '' ) || has_filter( 'job_manager_user_can_submit_job_listing' );
 }

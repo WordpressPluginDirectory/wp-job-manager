@@ -85,9 +85,19 @@ class WP_Job_Manager_Widget_Recent_Jobs extends WP_Job_Manager_Widget {
 	 * @param array $instance
 	 */
 	public function widget( $args, $instance ) {
+		// Browse-capability gate — match the [jobs] shortcode denial without rendering a partial widget.
+		if ( ! job_manager_user_can_browse_job_listings() ) {
+			return;
+		}
+
 		wp_enqueue_style( 'wp-job-manager-job-listings' );
 
-		if ( $this->get_cached_widget( $args ) ) {
+		// Skip the shared widget cache when view capability is configured: the per-listing template
+		// gate in `content-widget-job_listing.php` makes output viewer-dependent, and the base
+		// cache is keyed only by widget instance id (no auth partition).
+		$view_cap_can_filter = ! empty( get_option( 'job_manager_view_job_listing_capability' ) );
+
+		if ( ! $view_cap_can_filter && $this->get_cached_widget( $args ) ) {
 			return;
 		}
 
@@ -95,19 +105,20 @@ class WP_Job_Manager_Widget_Recent_Jobs extends WP_Job_Manager_Widget {
 
 		ob_start();
 
-		$title     = apply_filters( 'widget_title', $instance['title'], $instance, $this->id_base );
-		$number    = absint( $instance['number'] );
-		$jobs      = get_job_listings(
+		$title           = apply_filters( 'widget_title', $instance['title'], $instance, $this->id_base );
+		$number          = absint( $instance['number'] );
+		$remote_position = $instance['remote_position'] ?? '';
+		$jobs            = get_job_listings(
 			[
 				'search_location' => $instance['location'],
-				'remote_position' => in_array( $instance['remote_position'], [ 'true', 'false' ], true ) ? 'true' === $instance['remote_position'] : null,
+				'remote_position' => in_array( $remote_position, [ 'true', 'false' ], true ) ? 'true' === $remote_position : null,
 				'search_keywords' => $instance['keyword'],
 				'posts_per_page'  => $number,
 				'orderby'         => 'date',
 				'order'           => 'DESC',
 			]
 		);
-		$show_logo = absint( $instance['show_logo'] );
+		$show_logo       = absint( $instance['show_logo'] );
 
 		/**
 		 * Runs before Recent Jobs widget content.
@@ -169,7 +180,9 @@ class WP_Job_Manager_Widget_Recent_Jobs extends WP_Job_Manager_Widget {
 
 		echo $content; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
 
-		$this->cache_widget( $args, $content );
+		if ( ! $view_cap_can_filter ) {
+			$this->cache_widget( $args, $content );
+		}
 	}
 }
 

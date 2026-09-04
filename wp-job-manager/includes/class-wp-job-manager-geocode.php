@@ -216,14 +216,13 @@ class WP_Job_Manager_Geocode {
 
 		try {
 			if ( false === $geocoded_address || empty( $geocoded_address->results[0] ) ) {
-				$result           = wp_remote_get(
+				$result           = wp_safe_remote_get(
 					$geocode_api_url,
 					[
 						'timeout'     => 5,
 						'redirection' => 1,
 						'httpversion' => '1.1',
 						'user-agent'  => 'WordPress/WP-Job-Manager-' . JOB_MANAGER_VERSION . '; ' . get_bloginfo( 'url' ),
-						'sslverify'   => false,
 					]
 				);
 				$result           = wp_remote_retrieve_body( $result );
